@@ -1,5 +1,5 @@
 """
-教师端页面：学术诚信档案查询（只读、脱敏）、批量智能比对
+教师端页面：学术诚信档案查询（只读）、批量智能比对
 """
 from io import BytesIO
 
@@ -8,7 +8,7 @@ import streamlit as st
 
 from database import SessionLocal
 from models import AuditLog, Blacklist
-from utils import clean_student_id, mask_student_id, parse_batch_check_excel
+from utils import clean_student_id, parse_batch_check_excel
 
 
 def _log_teacher_action(action_type: str, target: str = "", details: str = ""):
@@ -30,22 +30,62 @@ def _log_teacher_action(action_type: str, target: str = "", details: str = ""):
         db.close()
 
 
-def render_teacher_page():
-    """教师页：单条查询 + 批量智能比对（Excel 上传、比对、报告下载）。"""
-    st.title("🎓 学术诚信档案查询 (Academic Integrity Query)")
-    st.caption("仅查询生效中的失信记录，学号脱敏显示。")
+def _render_my_logs():
+    """个人记录：展示当前用户最近操作历史（审计日志）。"""
+    st.subheader("个人记录")
+    st.caption("您最近的操作历史（最多 100 条）。")
+    db = SessionLocal()
+    try:
+        with st.spinner("加载中..."):
+            name = st.session_state.get("user_name", "")
+            if not name:
+                st.caption("无法获取当前用户。")
+                return
+            logs = (
+                db.query(AuditLog)
+                .filter(AuditLog.operator_name == name)
+                .order_by(AuditLog.timestamp.desc())
+                .limit(100)
+                .all()
+            )
+        if not logs:
+            st.caption("暂无操作记录。")
+            return
+        log_df = pd.DataFrame([
+            {
+                "时间": str(r.timestamp),
+                "类型": r.action_type,
+                "对象": r.target or "",
+                "详情": (r.details or "")[:80],
+            }
+            for r in logs
+        ])
+        st.dataframe(log_df, use_container_width=True, hide_index=True)
+    except Exception:
+        st.error("加载失败，请稍后重试。")
+    finally:
+        db.close()
 
-    tab_single, tab_batch = st.tabs(["🔍 单条查询", "📤 批量智能比对"])
+
+def render_teacher_page():
+    """教师页：单条查询 + 批量智能比对 + 个人记录。"""
+    st.title("🎓 学术诚信档案查询 (Academic Integrity Query)")
+    st.caption("仅查询生效中的失信记录。")
+
+    tab_single, tab_batch, tab_log = st.tabs(["🔍 单条查询", "📤 批量智能比对", "📋 个人记录"])
 
     with tab_single:
         _render_single_search()
 
     with tab_batch:
-        _render_batch_check(mask_id_in_report=True)
+        _render_batch_check()
+
+    with tab_log:
+        _render_my_logs()
 
 
 def _render_single_search():
-    """单条查询：输入姓名或学号，展示结果（脱敏）。"""
+    """单条查询：输入姓名或学号，展示结果。"""
     search_input = st.text_input("请输入学生姓名 或 学号", key="teacher_search", placeholder="姓名或学号")
     search_clicked = st.button("🔍 查询 (Search)", key="teacher_search_btn")
 
@@ -66,8 +106,8 @@ def _render_single_search():
                 (Blacklist.name == raw) | (Blacklist.student_id == clean_raw)
             )
             records = q.all()
-    except Exception as e:
-        st.error(f"查询失败：{e!s}")
+    except Exception:
+        st.error("查询失败，请稍后重试。")
         return
     finally:
         db.close()
@@ -77,20 +117,23 @@ def _render_single_search():
         return
 
     st.error("⚠️ 查询到失信/违规记录，请核实。")
-    for r in records:
-        with st.container():
-            st.markdown(f"**姓名**：{r.name}")
-            st.markdown(f"**学号**：{mask_student_id(r.student_id)}")
-            st.markdown(f"**专业**：{r.major or '—'}")
-            st.markdown(f"**原因**：{r.reason or '—'}")
-            st.markdown(f"**处分日期**：{r.punishment_date or '—'}")
-            st.divider()
+    single_table = pd.DataFrame([
+        {
+            "姓名": r.name,
+            "学号": r.student_id,
+            "专业": r.major or "",
+            "原因": (r.reason or "")[:80],
+            "处分日期": str(r.punishment_date) if r.punishment_date else "",
+        }
+        for r in records
+    ])
+    st.dataframe(single_table, use_container_width=True, hide_index=True)
 
 
 PAGE_SIZE = 10  # 每页最多 10 条违规学生信息
 
 
-def _render_batch_check(mask_id_in_report: bool = True):
+def _render_batch_check():
     """批量智能比对：上传 Excel，按学号与黑名单比对，展示结果并支持下载报告；表格分页每页 10 条。"""
     st.subheader("批量智能比对")
     st.caption("上传包含「学号」列的 Excel (.xlsx)，与生效名单比对；可下载比对结果报告。")
@@ -118,7 +161,7 @@ def _render_batch_check(mask_id_in_report: bool = True):
                 .all()
             )
         except Exception as e:
-            st.error(f"比对失败：{e!s}")
+            st.error("比对失败，请稍后重试。")
             return
         finally:
             db.close()
@@ -136,7 +179,7 @@ def _render_batch_check(mask_id_in_report: bool = True):
         st.session_state["teacher_batch_matched"] = [
             {
                 "姓名": r.name,
-                "学号": mask_student_id(r.student_id) if mask_id_in_report else r.student_id,
+                "学号": r.student_id,
                 "专业": r.major or "",
                 "原因": r.reason or "",
                 "处分日期": str(r.punishment_date) if r.punishment_date else "",

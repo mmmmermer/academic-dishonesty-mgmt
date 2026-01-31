@@ -1,11 +1,11 @@
 """
-登录页：表单校验、会话写入
+登录页：表单校验、会话写入、登录审计日志
 """
 import streamlit as st
 
 from auth import verify_password
 from database import SessionLocal
-from models import User
+from models import AuditLog, User
 
 
 def render_login_page():
@@ -37,14 +37,28 @@ def render_login_page():
         if not verify_password(password, user.password_hash):
             st.error("用户名或密码错误。")
             return
-        # 校验通过：写入会话并刷新
+        # 校验通过：写登录审计日志
+        log_db = SessionLocal()
+        try:
+            log_db.add(AuditLog(
+                operator_name=user.full_name,
+                action_type="LOGIN",
+                target=user.username,
+                details="",
+            ))
+            log_db.commit()
+        except Exception:
+            log_db.rollback()
+        finally:
+            log_db.close()
+        # 写入会话并刷新
         st.session_state.logged_in = True
         st.session_state.user_role = user.role
         st.session_state.user_name = user.full_name
         st.session_state.user_id = user.id
         st.session_state.username = user.username  # 工号，用于水印
         st.rerun()
-    except Exception as e:
-        st.error(f"登录过程出错，请稍后重试。错误：{e!s}")
+    except Exception:
+        st.error("登录过程出错，请稍后重试。")
     finally:
         db.close()

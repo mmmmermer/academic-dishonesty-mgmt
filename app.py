@@ -1,5 +1,5 @@
 """
-主入口：会话初始化、水印、导航、登出
+主入口：会话初始化、水印、导航、登出、启动时自动备份
 """
 import streamlit as st
 
@@ -20,6 +20,18 @@ except ImportError:
 
 
 from views.login import render_login_page
+
+
+def _run_auto_backup_once():
+    """会话内仅执行一次：将 database.db 备份到 backups/，失败不阻塞启动。"""
+    if st.session_state.get("auto_backup_done"):
+        return
+    try:
+        from utils import auto_backup
+        auto_backup()
+        st.session_state["auto_backup_done"] = True
+    except Exception:
+        pass
 
 
 def _init_session_state():
@@ -67,12 +79,18 @@ def _inject_watermark():
 def main():
     st.set_page_config(page_title="学术失信人员管理系统", layout="wide")
     _init_session_state()
+    # 启动时自动备份（每会话一次，失败不阻塞）
+    _run_auto_backup_once()
     # 水印：仅登录后注入，退出后消失
     _inject_watermark()
 
-    # 侧边栏登出（仅登录时显示按钮）
+    # 侧边栏：当前用户信息 + 登出
     with st.sidebar:
         if st.session_state.logged_in:
+            role_label = "管理员" if st.session_state.user_role == "admin" else "教师"
+            st.caption(f"**当前用户**：{st.session_state.user_name}（{st.session_state.username}）")
+            st.caption(f"**角色**：{role_label}")
+            st.divider()
             if st.button("退出登录", key="logout_btn"):
                 st.session_state.logged_in = False
                 st.session_state.user_role = ""
