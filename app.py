@@ -36,23 +36,24 @@ def _init_session_state():
 
 
 def _inject_watermark():
-    if st.session_state.logged_in:
-        text = f"{st.session_state.user_name} {st.session_state.username}"
-    else:
-        text = "Academic System"
-    # 浅灰色背景水印，防截屏泄露（需求：当前登录人姓名 + 工号）
+    """仅登录后显示水印（姓名+工号），全局固定、不阻挡操作；退出登录后不注入。"""
+    if not st.session_state.logged_in:
+        return
+    text = f"{st.session_state.user_name} {st.session_state.username}"
+    # 固定全屏、高层级、半透明、不响应点击，确保登录后全局可见且不消失
     css = f"""
-    <div style="
+    <div aria-hidden="true" style="
         position: fixed;
         top: 0;
         left: 0;
         width: 100%;
         height: 100%;
         pointer-events: none;
-        z-index: -1;
-        opacity: 0.12;
+        z-index: 2147483647;
+        opacity: 0.14;
         font-size: 96px;
-        color: #999;
+        font-weight: 500;
+        color: #666;
         transform: rotate(-25deg);
         display: flex;
         align-items: center;
@@ -66,6 +67,7 @@ def _inject_watermark():
 def main():
     st.set_page_config(page_title="学术失信人员管理系统", layout="wide")
     _init_session_state()
+    # 水印：仅登录后注入，退出后消失
     _inject_watermark()
 
     # 侧边栏登出（仅登录时显示按钮）

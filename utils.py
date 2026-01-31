@@ -1,5 +1,5 @@
 """
-工具模块：身份证处理、Excel 解析、备份逻辑
+工具模块：学号处理、Excel 解析、备份逻辑
 """
 import os
 import shutil
@@ -16,37 +16,30 @@ DATABASE_PATH = os.path.join(DATABASE_DIR, "database.db")
 BACKUPS_DIR = os.path.join(DATABASE_DIR, "backups")
 
 # Excel 黑名单导入必需列
-REQUIRED_EXCEL_COLUMNS = ["姓名", "身份证号", "专业", "原因", "处分时间"]
+REQUIRED_EXCEL_COLUMNS = ["姓名", "学号", "专业", "原因", "处分时间"]
 
-# 全角数字/字母到半角映射（身份证中可能出现的）
+# 全角数字到半角映射（学号中可能出现的）
 FULL_TO_HALF_DIGITS = str.maketrans("０１２３４５６７８９", "0123456789")
-FULL_TO_HALF_X = str.maketrans("ｘＸ", "XX")  # 全角 x/X 统一为半角 X
 
 
-def clean_id_card(text: Any) -> str:
+def clean_student_id(text: Any) -> str:
     """
-    清洗身份证号：去除所有空白、全角数字转半角、小写 x 转大写 X。
+    清洗学号：去除所有空白、全角数字转半角。
     """
     if text is None or (isinstance(text, float) and pd.isna(text)):
         return ""
     if isinstance(text, str) and text.strip().lower() in ("nan", ""):
         return ""
     s = str(text).strip()
-    # 去除所有空白（空格、制表、换行等）
     s = "".join(s.split())
-    # 全角数字转半角
     s = s.translate(FULL_TO_HALF_DIGITS)
-    # 全角 x/X 转半角 X
-    s = s.translate(FULL_TO_HALF_X)
-    # 半角小写 x 转大写 X
-    s = s.replace("x", "X")
     return s
 
 
-def mask_id_card(text: Any) -> str:
+def mask_student_id(text: Any) -> str:
     """
-    身份证脱敏：保留前 3 位与后 4 位，中间用 * 代替。
-    例如：320***********1234
+    学号脱敏：保留前 3 位与后 4 位，中间用 * 代替。
+    例如：202***********1234
     """
     if text is None or (isinstance(text, float) and pd.isna(text)):
         return ""
@@ -58,7 +51,7 @@ def mask_id_card(text: Any) -> str:
 
 def parse_blacklist_excel(uploaded_file: Any) -> pd.DataFrame:
     """
-    解析黑名单 Excel：校验必需列、清洗身份证号后返回 DataFrame。
+    解析黑名单 Excel：校验必需列、清洗学号后返回 DataFrame。
     使用 pandas + openpyxl 读取。
 
     :param uploaded_file: 上传的文件对象（支持 .read() 返回 bytes）或文件路径
@@ -81,8 +74,37 @@ def parse_blacklist_excel(uploaded_file: Any) -> pd.DataFrame:
     if missing:
         raise ValueError(f"缺少必要列：{', '.join(missing)}。请确保表格包含：{', '.join(REQUIRED_EXCEL_COLUMNS)}。")
 
-    # 对身份证号列立即清洗
-    df["身份证号"] = df["身份证号"].astype(str).map(clean_id_card)
+    df["学号"] = df["学号"].astype(str).map(clean_student_id)
+    return df
+
+
+# 批量比对用 Excel 至少需要一列学号
+BATCH_CHECK_ID_COLUMN = "学号"
+
+
+def parse_batch_check_excel(uploaded_file: Any) -> pd.DataFrame:
+    """
+    解析批量比对用 Excel：至少包含「学号」列，清洗后返回。
+    可选列：姓名（用于报告显示）。
+    """
+    try:
+        if hasattr(uploaded_file, "read"):
+            raw = uploaded_file.read()
+            if isinstance(raw, str):
+                raw = raw.encode("utf-8")
+            io = BytesIO(raw)
+        else:
+            io = uploaded_file
+        df = pd.read_excel(io, engine="openpyxl")
+    except Exception as e:
+        raise ValueError(f"无法读取 Excel 文件，请确认格式为 .xlsx。错误信息：{e!s}") from e
+
+    if BATCH_CHECK_ID_COLUMN not in df.columns:
+        raise ValueError("缺少「学号」列。请确保表格至少包含一列：学号。")
+
+    df = df.copy()
+    df[BATCH_CHECK_ID_COLUMN] = df[BATCH_CHECK_ID_COLUMN].astype(str).map(clean_student_id)
+    df = df[df[BATCH_CHECK_ID_COLUMN].str.len() > 0].reset_index(drop=True)
     return df
 
 

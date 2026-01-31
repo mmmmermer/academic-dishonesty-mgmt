@@ -4,41 +4,42 @@
 ## 1. 项目概述 (Overview)
 这是一个用于高校内部管理的 Web 系统，旨在记录、公示和查询学术失信人员名单。
 系统由**个人开发者**使用 AI 辅助开发，核心目标是**稳定、可靠、操作简单**。
-- **核心逻辑**: Excel 导入名单库 -> 自动清洗 -> 本地 SQLite 存储 -> 前端公示与比对。
+- **核心逻辑**: Excel 导入名单库 → 自动清洗（学号等）→ 本地 SQLite 存储 → 前端公示与比对。
+- **身份标识**: 名单以**学号**为唯一标识进行存储与比对（原需求为身份证号，已优化为学号）。
 - **部署环境**: 学校办公室局域网 (Windows/Linux Server)。
 
 ## 2. 技术栈 (Tech Stack)
 - **编程语言**: Python 3.9+
-- **Web 框架**: Streamlit (界面构建，使用 `st.session_state` 管理状态)
-- **数据处理**: Pandas (Excel 读取与清洗), OpenPyxl
-- **数据库**: SQLite (单文件数据库，无需额外安装)
-- **ORM 工具**: SQLAlchemy (用于数据库交互)
-- **安全工具**: BCrypt (密码加密), Hashlib
-- **图表工具**: Plotly Express (用于管理员仪表盘)
+- **Web 框架**: Streamlit（界面构建，使用 `st.session_state` 管理状态）
+- **数据处理**: Pandas（Excel 读取与清洗）、OpenPyxl
+- **数据库**: SQLite（单文件数据库，无需额外安装）
+- **ORM 工具**: SQLAlchemy（数据库交互）
+- **安全工具**: BCrypt（密码加密与校验）
+- **图表工具**: Plotly Express（管理员仪表盘饼图等）
 
 ## 3. 数据库设计 (Database Schema)
-请在 `models.py` 中严格定义以下表结构：
+在 `models.py` 中定义以下表结构：
 
 ### 3.1 用户表 (users)
 | 字段名 | 类型 | 说明 |
 | :--- | :--- | :--- |
 | id | Integer | 主键 |
-| username | String | 登录账号 (工号/ID) |
+| username | String | 登录账号（工号/ID） |
 | password_hash | String | BCrypt 加密后的密码 |
-| full_name | String | 真实姓名 (用于显示水印) |
-| role | String | 角色: 'admin' (管理员) 或 'teacher' (普通教师) |
-| is_active | Boolean | 账号状态 (默认 True) |
+| full_name | String | 真实姓名（用于显示水印） |
+| role | String | 角色：'admin'（管理员）或 'teacher'（教师） |
+| is_active | Boolean | 账号状态（默认 True） |
 
 ### 3.2 失信名单主表 (blacklist)
 | 字段名 | 类型 | 说明 |
 | :--- | :--- | :--- |
 | id | Integer | 主键 |
-| name | String | 姓名 (索引) |
-| id_card | String | 身份证号 (建议清洗后存储，必须唯一) |
-| major | String | **所学专业** (新增字段，用于区分重名) |
+| name | String | 姓名（索引） |
+| student_id | String | **学号**（唯一，建议清洗后存储；实现中可与旧库列名 id_card 兼容） |
+| major | String | 所学专业（用于区分重名） |
 | reason | Text | 失信/违规具体原因 |
 | punishment_date | Date | 处分日期 |
-| status | Integer | 状态: 1=生效中, 0=已撤销/软删除 |
+| status | Integer | 状态：1=生效中，0=已撤销/软删除 |
 | created_at | DateTime | 创建时间 |
 
 ### 3.3 审计日志表 (audit_logs)
@@ -46,66 +47,69 @@
 | 字段名 | 类型 | 说明 |
 | :--- | :--- | :--- |
 | id | Integer | 主键 |
-| operator_name | String | 操作人姓名 (冗余存储，防用户被删后查不到) |
-| action_type | String | 类型枚举: LOGIN, QUERY_BATCH, IMPORT, ADD, DELETE, BACKUP |
-| target | String | 操作对象简述 (如文件名或人名) |
-| details | JSON/Text | 变更详情 (如修改前后的值) |
+| operator_name | String | 操作人姓名（冗余存储） |
+| action_type | String | 类型：LOGIN, QUERY_BATCH, IMPORT, ADD, DELETE, BACKUP |
+| target | String | 操作对象简述（如文件名或人名） |
+| details | Text | 变更详情（如修改前后值） |
 | timestamp | DateTime | 操作时间 |
 
 ## 4. 功能模块与权限 (Features & Roles)
 
 ### A. 普通教师端 (Teacher Role)
-**设计原则**: 只读、查询、隐私保护。
+**设计原则**: 只读、查询、隐私保护（学号脱敏）。
 
-1.  **全员名单公示 (List View)**:
-    -   以表格形式分页展示所有 `status=1` 的人员。
-    -   **隐私强制**: 身份证号列必须脱敏 (显示为 `320******1234`)。
-    -   **筛选**: 支持按 `姓名`、`专业`、`年份` 进行组合筛选。
-    -   **验证**: 提供“详情/验证”按钮，输入完整身份证号可验证是否匹配（但不直接显示完整号）。
-2.  **批量智能比对 (Batch Check)**:
-    -   **输入**: 仅支持上传 Excel 文件 (.xlsx)。
-    -   **逻辑**: 系统在内存中读取上传文件，与数据库进行全量比对（基于 身份证号）。
-    -   **反馈**: 
-        -   若无命中：显示绿色成功提示。
-        -   若有命中：显示红色警告，并列出命中人员详情。
-    -   **导出**: 允许下载“比对结果报告” (Excel)，包含命中的人员及数据库中的详细信息。
-3.  **个人记录**: 查看自己最近的操作历史。
+1. **单条查询**
+   - 输入：学生**姓名**或**学号**。
+   - 仅查询 `status=1` 的生效记录；学号在界面与报告中**脱敏**显示（前 3 位 + * + 后 4 位，如 `202***********1234`）。
+   - 未命中时提示「未查询到违规记录，该生信用良好」；命中时展示姓名、学号（脱敏）、专业、原因、处分日期。
+2. **批量智能比对**
+   - **输入**: 仅支持上传 Excel 文件 (.xlsx)，表格至少包含「**学号**」列。
+   - **逻辑**: 在内存中读取上传文件，对学号列清洗后与数据库进行全量比对（基于学号）。
+   - **反馈**:
+     - 若无命中：绿色成功提示。
+     - 若有命中：红色警告，命中结果以**表格**展示，支持**分页**（每页最多 10 条）。
+   - **导出**: 可下载「比对结果报告」Excel，包含命中人员及数据库中的详细信息（教师端报告中学号脱敏）。
 
 ### B. 管理员端 (Admin Role)
-拥有 Teacher 所有功能，并额外包含：
+拥有教师端所有功能（含单条查询、批量比对），并额外包含：
 
-1.  **数据仪表盘 (Dashboard)**:
-    -   位于首页顶部。
-    -   显示：总人数统计、按“专业”分布的饼图、按“年份”分布的柱状图。
-2.  **名单数据库管理**:
-    -   **批量导入**: 上传 Excel 更新数据库。
-        -   *必须包含数据清洗*: 自动去除身份证空格、全角转半角、小写x转大写X。
-        -   *容错*: 如果 Excel 列名不匹配，抛出友好的中文错误提示。
-    -   **单条操作**: 手动新增人员、编辑现有人员信息。
-    -   **软删除**: 点击删除时，将 `status` 设为 0（不物理删除）。
-3.  **系统维护与备份 (Maintenance)**:
-    -   **自动备份**: 系统启动时自动备份 `database.db` 到 `backups/` 目录。
-    -   **手动全库备份 (重要)**: 提供一个 `st.download_button`，允许管理员下载当前的 `.db` 数据库文件（文件名带时间戳）。
-4.  **日志审计**: 查看所有用户的操作日志表格。
-5.  **用户管理**: 简单的用户注册审批或密码重置。
+1. **数据仪表盘 (Dashboard)**
+   - 位于管理员页第一个 Tab。
+   - 显示：名单总数、生效中数量、已撤销数量；按「专业」分布的**饼图**。
+2. **名单数据库管理**
+   - **批量导入**: 上传 Excel 更新数据库。
+     - 必需列：**姓名、学号、专业、原因、处分时间**。
+     - *数据清洗*: 学号自动去空格、全角转半角。
+     - *容错*: 列名不匹配时抛出友好中文错误提示；学号已存在则更新该条记录。
+   - **单条操作**: 手动新增人员（姓名、学号、专业、原因、处分日期）；学号唯一，重复时提示。
+   - **列表与软删除**: 表格展示所有生效记录；支持按记录 ID 软删除（将 `status` 设为 0）。
+   - **批量查询**: 上传含「学号」列的 Excel，与生效名单比对，可下载比对结果报告（管理员端报告含完整学号）。
+3. **系统维护与备份**
+   - **审计日志**: 展示所有用户操作日志表格（最近 500 条）。
+   - **手动全库备份**: 提供 `st.download_button`，下载当前 `.db` 文件（文件名带时间戳）；底层通过 `get_db_file_bytes()` 以二进制模式 ('rb') 读取。
+   - （可选扩展）系统启动时自动备份 `database.db` 到 `backups/` 目录，由 `utils.auto_backup()` 实现。
+4. **用户管理**
+   - 用户列表（工号、姓名、角色、状态）。
+   - 新增用户：工号、密码、真实姓名、角色（教师/管理员）。
+   - 密码重置：选择用户并设置新密码。
+   - 启用/禁用账号：切换用户状态（不可禁用当前登录账号）。
 
 ## 5. UI/UX 设计规范 (UI Guidelines)
-1.  **水印防护**: 全局背景必须包含浅灰色水印（内容：当前登录人姓名 + 工号），防止截屏泄露。
-2.  **交互反馈**:
-    -   所有耗时操作（如导入、比对）必须包裹在 `with st.spinner('正在处理...'):` 中。
-    -   导入成功显示 `st.balloons()`。
-3.  **容错性**: 
-    -   禁止显示代码层面的 Traceback 报错。所有 `try-except` 捕获后需通过 `st.error` 显示中文提示。
+1. **水印防护**: 全局背景浅灰色水印，内容为「当前登录人姓名 + 工号」，防止截屏泄露。
+2. **交互反馈**:
+   - 耗时操作（导入、比对、查询等）使用 `st.spinner('正在处理...')` 等提示。
+   - 导入成功可显示 `st.balloons()`。
+3. **容错性**: 禁止直接暴露代码 Traceback；`try-except` 捕获后通过 `st.error` 等展示中文提示。
 
-## 6. 开发建议 (Development Instructions for Cursor)
-请按照以下步骤生成代码：
-1.  **Phase 1 (Infrastructure)**: 创建 `database.py` (连接), `models.py` (表定义), `auth.py` (BCrypt 加密与校验)。
-2.  **Phase 2 (Utils)**: 创建 `utils.py`，实现 Excel 解析、身份证清洗 (`clean_id_card`)、脱敏 (`mask_id_card`)、备份逻辑。
-3.  **Phase 3 (UI - Auth)**: 创建 `app.py` 和登录页面，实现 Session 状态管理。
-4.  **Phase 4 (UI - Features)**: 创建 `views/teacher_page.py` (查询/比对) 和 `views/admin_page.py` (管理/备份/图表)。
-5.  **Phase 5 (Testing)**: 创建 `init_db.py` 初始化管理员账号 (admin / 123456)。
+## 6. 项目结构与开发阶段 (Structure & Phases)
+- **Phase 1 (Infrastructure)**: `database.py`（连接与会话）、`models.py`（表定义）、`auth.py`（BCrypt 校验）、`init_db.py`（建表与默认管理员 admin/123456）。
+- **Phase 2 (Utils)**: `utils.py` — 学号清洗 `clean_student_id`、学号脱敏 `mask_student_id`、黑名单 Excel 解析 `parse_blacklist_excel`（列：姓名、学号、专业、原因、处分时间）、批量比对 Excel 解析 `parse_batch_check_excel`（至少学号列）、备份 `auto_backup`、`get_db_file_bytes`。
+- **Phase 3 (UI - Auth)**: `app.py`（主入口、会话初始化、水印、导航）、`views/login.py`（登录页）。
+- **Phase 4 (UI - Features)**: `views/teacher_page.py`（单条查询 + 批量比对，分页与报告下载）、`views/admin_page.py`（仪表盘、名单管理、系统维护、用户管理）。
 
-## 7. 特别约束
-- **Excel 依赖**: 使用 `pandas` 读取 Excel，`engine='openpyxl'`。
-- **环境**: 生成 `requirements.txt`。
-- **备份**: 确保 `get_database_file` 函数以二进制模式 ('rb') 读取文件以供下载。
+**运行方式**: 在项目根目录执行 `python -m streamlit run app.py`；首次使用前执行 `python init_db.py` 初始化数据库与默认管理员。
+
+## 7. 特别约束 (Constraints)
+- **Excel**: 使用 `pandas` 读取，`engine='openpyxl'`；导入与批量比对所需列见上文。
+- **备份下载**: 提供 `get_db_file_bytes()`，以二进制模式 ('rb') 读取 `database.db` 供下载按钮使用。
+- **环境**: 提供 `requirements.txt`，包含 streamlit、sqlalchemy、bcrypt、pandas、openpyxl、plotly 等依赖。

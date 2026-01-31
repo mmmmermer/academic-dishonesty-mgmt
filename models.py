@@ -30,7 +30,8 @@ class Blacklist(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(64), nullable=False, index=True, comment="姓名")
-    id_card = Column(String(32), nullable=False, unique=True, comment="身份证号(清洗后)")
+    # 数据库列名仍为 id_card，兼容旧库；Python 属性为 student_id（学号）
+    student_id = Column("id_card", String(32), nullable=False, unique=True, comment="学号(唯一)")
     major = Column(String(128), nullable=True, comment="所学专业")
     reason = Column(Text, nullable=True, comment="失信/违规具体原因")
     punishment_date = Column(Date, nullable=True, comment="处分日期")
