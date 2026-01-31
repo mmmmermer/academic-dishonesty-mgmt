@@ -7,28 +7,26 @@ import pandas as pd
 import streamlit as st
 
 from config import AUDIT_QUERY_BATCH, AUDIT_QUERY_SINGLE
-from database import SessionLocal
+from database import SessionLocal, db_session
 from models import AuditLog, Blacklist
 from utils import clean_student_id, parse_batch_check_excel
 
 
 def _log_teacher_action(action_type: str, target: str = "", details: str = ""):
     """教师端写入审计日志（如批量比对）。"""
-    db = SessionLocal()
-    try:
-        name = st.session_state.get("user_name", "未知")
-        log = AuditLog(
-            operator_name=name,
-            action_type=action_type,
-            target=target[:256] if target else None,
-            details=details[:4096] if details else None,
-        )
-        db.add(log)
-        db.commit()
-    except Exception:
-        db.rollback()
-    finally:
-        db.close()
+    with db_session() as db:
+        try:
+            name = st.session_state.get("user_name", "未知")
+            log = AuditLog(
+                operator_name=name,
+                action_type=action_type,
+                target=target[:256] if target else None,
+                details=details[:4096] if details else None,
+            )
+            db.add(log)
+            db.commit()
+        except Exception:
+            db.rollback()
 
 
 def _render_my_logs():

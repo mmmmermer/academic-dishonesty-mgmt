@@ -20,9 +20,12 @@ from config import (
     AUDIT_QUERY_BATCH,
     AUDIT_RESTORE,
     BATCH_IMPORT_COMMIT_EVERY,
+    LABEL_INIT_LIST,
     LIST_PAGE_SIZE,
+    MSG_ENTER_VALID_SID,
+    PLACEHOLDER_FILTER_EMPTY,
 )
-from database import SessionLocal
+from database import SessionLocal, db_session
 from models import AuditLog, Blacklist, User
 from utils import (
     DATABASE_PATH,
@@ -35,21 +38,19 @@ from utils import (
 
 def _log_action(action_type: str, target: str = "", details: str = ""):
     """写入审计日志。"""
-    db = SessionLocal()
-    try:
-        name = st.session_state.get("user_name", "未知")
-        log = AuditLog(
-            operator_name=name,
-            action_type=action_type,
-            target=target[:256] if target else None,
-            details=details[:4096] if details else None,
-        )
-        db.add(log)
-        db.commit()
-    except Exception:
-        db.rollback()
-    finally:
-        db.close()
+    with db_session() as db:
+        try:
+            name = st.session_state.get("user_name", "未知")
+            log = AuditLog(
+                operator_name=name,
+                action_type=action_type,
+                target=target[:256] if target else None,
+                details=details[:4096] if details else None,
+            )
+            db.add(log)
+            db.commit()
+        except Exception:
+            db.rollback()
 
 
 def _render_dashboard(db):
@@ -93,9 +94,8 @@ def _render_dashboard(db):
             st.plotly_chart(fig_bar, use_container_width=True)
 
 
-def _render_management(db):
-    """Tab 2: 名单管理 - 批量导入、手动新增、列表与软删除。"""
-    # ---------- 批量导入 ----------
+def _render_import_section(db):
+    """名单管理：批量导入 Excel 预览与导入。"""
     st.subheader("批量导入")
     uploaded = st.file_uploader("上传 Excel (.xlsx / .xls)", type=["xlsx", "xls"], key="admin_import_file")
     # 上传新文件时解析并缓存，用于预览与导入
@@ -187,9 +187,12 @@ def _render_management(db):
                 st.error(
                     f"导入失败，已成功导入 {last_imported} 条，更新 {last_updated} 条；后续数据出错，请检查 Excel 格式（需包含：姓名、学号、专业、原因、处分时间）。"
                 )
+    return
 
+
+def _render_manual_add_section(db):
+    """名单管理：手动新增单条记录。"""
     st.divider()
-    # ---------- 手动新增 ----------
     st.subheader("手动新增")
     with st.form("admin_add_form"):
         add_name = st.text_input("姓名", key="add_name")
@@ -220,12 +223,15 @@ def _render_management(db):
                             _log_action(AUDIT_ADD, target=add_name, details=f"学号 {sid_clean[:8]}***")
                             st.success("已添加。")
                             st.rerun()
-                except Exception as e:
+                except Exception:
                     db.rollback()
                     st.error("添加失败，请检查学号是否重复或联系管理员。")
+    return
 
+
+def _render_effective_list_section(db):
+    """名单管理：生效名单、筛选、分页、软删除、初始化名单、编辑入口。"""
     st.divider()
-    # ---------- 列表与软删除 ----------
     st.subheader("生效名单与删除")
     effective_list = db.query(Blacklist).filter(Blacklist.status == 1).order_by(Blacklist.id).all()
     if not effective_list:
@@ -234,11 +240,11 @@ def _render_management(db):
         st.caption("可按姓名、学号、专业筛选（留空表示不限制）。")
         ef1, ef2, ef3 = st.columns(3)
         with ef1:
-            filter_effective_name = st.text_input("姓名筛选", key="admin_effective_filter_name", placeholder="留空不限制")
+            filter_effective_name = st.text_input("姓名筛选", key="admin_effective_filter_name", placeholder=PLACEHOLDER_FILTER_EMPTY)
         with ef2:
-            filter_effective_sid = st.text_input("学号筛选", key="admin_effective_filter_sid", placeholder="留空不限制")
+            filter_effective_sid = st.text_input("学号筛选", key="admin_effective_filter_sid", placeholder=PLACEHOLDER_FILTER_EMPTY)
         with ef3:
-            filter_effective_major = st.text_input("专业筛选", key="admin_effective_filter_major", placeholder="留空不限制")
+            filter_effective_major = st.text_input("专业筛选", key="admin_effective_filter_major", placeholder=PLACEHOLDER_FILTER_EMPTY)
         fn = (filter_effective_name or "").strip()
         fs = (filter_effective_sid or "").strip()
         fm = (filter_effective_major or "").strip()
@@ -286,7 +292,7 @@ def _render_management(db):
             try:
                 sid_clean = clean_student_id(del_sid_input.strip())
                 if not sid_clean:
-                    st.error("请输入有效学号。")
+                    st.error(MSG_ENTER_VALID_SID)
                 else:
                     rec = db.query(Blacklist).filter(
                         Blacklist.status == 1, Blacklist.student_id == sid_clean
@@ -306,10 +312,10 @@ def _render_management(db):
 
         # ---------- 初始化名单（二次确认） ----------
         st.divider()
-        st.subheader("初始化名单")
+        st.subheader(LABEL_INIT_LIST)
         st.caption("将所有生效记录设为已撤销，清空生效名单。请谨慎操作。")
         if not st.session_state.get("admin_show_init_confirm"):
-            if st.button("初始化名单", key="admin_init_list_btn"):
+            if st.button(LABEL_INIT_LIST, key="admin_init_list_btn"):
                 st.session_state["admin_show_init_confirm"] = True
                 st.rerun()
         else:
@@ -321,12 +327,12 @@ def _render_management(db):
                         with st.spinner("正在初始化..."):
                             n = db.query(Blacklist).filter(Blacklist.status == 1).update({Blacklist.status: 0})
                             db.commit()
-                            _log_action(AUDIT_DELETE, target="初始化名单", details=f"共 {n} 条生效记录设为已撤销")
+                            _log_action(AUDIT_DELETE, target=LABEL_INIT_LIST, details=f"共 {n} 条生效记录设为已撤销")
                         if "admin_show_init_confirm" in st.session_state:
                             del st.session_state["admin_show_init_confirm"]
                         st.success("名单已初始化，生效名单已清空。")
                         st.rerun()
-                    except Exception as e:
+                    except Exception:
                         db.rollback()
                         st.error("初始化失败，请稍后重试。")
             with col_cancel:
@@ -343,7 +349,7 @@ def _render_management(db):
             try:
                 sid_edit = clean_student_id(edit_sid_input.strip())
                 if not sid_edit:
-                    st.error("请输入有效学号。")
+                    st.error(MSG_ENTER_VALID_SID)
                 else:
                     rec = db.query(Blacklist).filter(
                         Blacklist.status == 1, Blacklist.student_id == sid_edit
@@ -358,53 +364,57 @@ def _render_management(db):
             except Exception:
                 db.rollback()
                 st.error("查找记录失败，请检查学号后重试。")
+    return
 
-    # 编辑表单（在列表外，避免 db 作用域问题）
-    if st.session_state.get("admin_edit_id"):
-        edit_id = st.session_state["admin_edit_id"]
-        edit_db = SessionLocal()
-        try:
-            rec = edit_db.query(Blacklist).filter(Blacklist.id == edit_id).first()
-            if not rec or rec.status != 1:
+
+def _render_edit_form_section():
+    """名单管理：编辑现有记录表单（独立会话）。"""
+    if not st.session_state.get("admin_edit_id"):
+        return
+    edit_id = st.session_state["admin_edit_id"]
+    with db_session() as edit_db:
+        rec = edit_db.query(Blacklist).filter(Blacklist.id == edit_id).first()
+        if not rec or rec.status != 1:
+            if "admin_edit_id" in st.session_state:
+                del st.session_state["admin_edit_id"]
+            st.rerun()
+            return
+        with st.form("admin_edit_form"):
+            st.caption(f"正在编辑记录 ID：{edit_id}（学号不可修改）")
+            edit_name = st.text_input("姓名", value=rec.name, key="admin_edit_name")
+            st.text_input("学号（不可修改）", value=rec.student_id, disabled=True, key="admin_edit_sid_display")
+            edit_major = st.text_input("专业", value=rec.major or "", key="admin_edit_major")
+            edit_reason = st.text_area("原因", value=rec.reason or "", key="admin_edit_reason")
+            edit_date_val = rec.punishment_date
+            edit_date = st.date_input("处分日期", value=edit_date_val or datetime.now().date(), key="admin_edit_date")
+            col_save, col_cancel = st.columns(2)
+            with col_save:
+                submit_save = st.form_submit_button("保存修改")
+            with col_cancel:
+                submit_cancel = st.form_submit_button("取消")
+            if submit_save:
+                try:
+                    rec.name = (edit_name or "").strip() or rec.name
+                    rec.major = (edit_major or "").strip() or None
+                    rec.reason = (edit_reason or "").strip() or None
+                    rec.punishment_date = edit_date
+                    edit_db.commit()
+                    _log_action(AUDIT_ADD, target=f"编辑记录 {edit_id}", details=f"{rec.name} {rec.student_id[:8]}***")
+                    if "admin_edit_id" in st.session_state:
+                        del st.session_state["admin_edit_id"]
+                    st.success("已保存修改。")
+                    st.rerun()
+                except Exception:
+                    edit_db.rollback()
+                    st.error("保存失败，请检查输入后重试。")
+            if submit_cancel:
                 if "admin_edit_id" in st.session_state:
                     del st.session_state["admin_edit_id"]
                 st.rerun()
-            with st.form("admin_edit_form"):
-                st.caption(f"正在编辑记录 ID：{edit_id}（学号不可修改）")
-                edit_name = st.text_input("姓名", value=rec.name, key="admin_edit_name")
-                st.text_input("学号（不可修改）", value=rec.student_id, disabled=True, key="admin_edit_sid_display")
-                edit_major = st.text_input("专业", value=rec.major or "", key="admin_edit_major")
-                edit_reason = st.text_area("原因", value=rec.reason or "", key="admin_edit_reason")
-                edit_date_val = rec.punishment_date
-                edit_date = st.date_input("处分日期", value=edit_date_val or datetime.now().date(), key="admin_edit_date")
-                col_save, col_cancel = st.columns(2)
-                with col_save:
-                    submit_save = st.form_submit_button("保存修改")
-                with col_cancel:
-                    submit_cancel = st.form_submit_button("取消")
-                if submit_save:
-                    try:
-                        rec.name = (edit_name or "").strip() or rec.name
-                        rec.major = (edit_major or "").strip() or None
-                        rec.reason = (edit_reason or "").strip() or None
-                        rec.punishment_date = edit_date
-                        edit_db.commit()
-                        _log_action(AUDIT_ADD, target=f"编辑记录 {edit_id}", details=f"{rec.name} {rec.student_id[:8]}***")
-                        if "admin_edit_id" in st.session_state:
-                            del st.session_state["admin_edit_id"]
-                        st.success("已保存修改。")
-                        st.rerun()
-                    except Exception as e:
-                        edit_db.rollback()
-                        st.error("保存失败，请检查输入后重试。")
-                if submit_cancel:
-                    if "admin_edit_id" in st.session_state:
-                        del st.session_state["admin_edit_id"]
-                    st.rerun()
-        finally:
-            edit_db.close()
 
-    # ---------- 已撤销名单与恢复 ----------
+
+def _render_revoked_section(db):
+    """名单管理：已撤销名单、筛选、分页、恢复为生效。"""
     st.divider()
     st.subheader("已撤销名单与恢复")
     revoked_list = db.query(Blacklist).filter(Blacklist.status == 0).order_by(Blacklist.id).all()
@@ -414,11 +424,11 @@ def _render_management(db):
         st.caption("可按姓名、学号、专业筛选（留空表示不限制）。")
         rv1, rv2, rv3 = st.columns(3)
         with rv1:
-            filter_revoked_name = st.text_input("姓名筛选", key="admin_revoked_filter_name", placeholder="留空不限制")
+            filter_revoked_name = st.text_input("姓名筛选", key="admin_revoked_filter_name", placeholder=PLACEHOLDER_FILTER_EMPTY)
         with rv2:
-            filter_revoked_sid = st.text_input("学号筛选", key="admin_revoked_filter_sid", placeholder="留空不限制")
+            filter_revoked_sid = st.text_input("学号筛选", key="admin_revoked_filter_sid", placeholder=PLACEHOLDER_FILTER_EMPTY)
         with rv3:
-            filter_revoked_major = st.text_input("专业筛选", key="admin_revoked_filter_major", placeholder="留空不限制")
+            filter_revoked_major = st.text_input("专业筛选", key="admin_revoked_filter_major", placeholder=PLACEHOLDER_FILTER_EMPTY)
         rn = (filter_revoked_name or "").strip()
         rs = (filter_revoked_sid or "").strip()
         rm = (filter_revoked_major or "").strip()
@@ -465,7 +475,7 @@ def _render_management(db):
             try:
                 sid_restore = clean_student_id(restore_sid_input.strip())
                 if not sid_restore:
-                    st.error("请输入有效学号。")
+                    st.error(MSG_ENTER_VALID_SID)
                 else:
                     rec = db.query(Blacklist).filter(
                         Blacklist.status == 0, Blacklist.student_id == sid_restore
@@ -486,7 +496,11 @@ def _render_management(db):
             except Exception:
                 db.rollback()
                 st.error("恢复失败，请稍后重试。")
+    return
 
+
+def _render_batch_check_section(db):
+    """名单管理：批量查询（上传 Excel 与生效名单比对）。"""
     st.divider()
     st.subheader("批量查询")
     st.caption("上传包含「学号」列的 Excel，与生效名单比对；可下载比对结果报告（含完整学号）。")
@@ -545,6 +559,16 @@ def _render_management(db):
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key="admin_batch_download",
                     )
+
+
+def _render_management(db):
+    """Tab 2: 名单管理 - 委托各子区块渲染，便于维护与单测。"""
+    _render_import_section(db)
+    _render_manual_add_section(db)
+    _render_effective_list_section(db)
+    _render_edit_form_section()
+    _render_revoked_section(db)
+    _render_batch_check_section(db)
 
 
 def _render_system(db):
@@ -810,8 +834,7 @@ def render_admin_page():
         ["📊 仪表盘", "📋 名单管理", "🛠️ 系统维护", "👥 用户管理"]
     )
 
-    db = SessionLocal()
-    try:
+    with db_session() as db:
         with tab1:
             _render_dashboard(db)
         with tab2:
@@ -820,5 +843,3 @@ def render_admin_page():
             _render_system(db)
         with tab4:
             _render_user_management(db)
-    finally:
-        db.close()

@@ -41,3 +41,8 @@ LIST_PAGE_SIZE = 20
 
 # 批量导入：每处理多少条执行一次 commit，降低长事务与内存占用
 BATCH_IMPORT_COMMIT_EVERY = 100
+
+# ---------- 业务文案常量（便于统一修改与 i18n） ----------
+PLACEHOLDER_FILTER_EMPTY = "留空不限制"
+MSG_ENTER_VALID_SID = "请输入有效学号。"
+LABEL_INIT_LIST = "初始化名单"
