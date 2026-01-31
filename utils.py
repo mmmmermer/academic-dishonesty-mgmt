@@ -7,7 +7,7 @@ from datetime import datetime
 from io import BytesIO
 from typing import Any
 
-import pandas as pd
+import pandas as pd  # type: ignore[reportMissingImports]
 
 from database import DATABASE_DIR
 

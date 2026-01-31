@@ -27,3 +27,17 @@ AUDIT_ACTION_TYPES = [
 # 名单状态
 BLACKLIST_STATUS_EFFECTIVE = 1
 BLACKLIST_STATUS_REVOKED = 0
+
+# 会话超时（分钟）：无操作超过此时长将自动退出登录
+SESSION_TIMEOUT_MINUTES = 30
+
+# 登录失败限制：同一账号连续失败次数超过此值将进入冷却
+LOGIN_FAIL_MAX = 5
+# 登录冷却时间（秒）：冷却期内该账号不可再次尝试
+LOGIN_COOLDOWN_SECONDS = 300
+
+# 名单分页：每页条数（管理员生效/已撤销名单）
+LIST_PAGE_SIZE = 20
+
+# 批量导入：每处理多少条执行一次 commit，降低长事务与内存占用
+BATCH_IMPORT_COMMIT_EVERY = 100

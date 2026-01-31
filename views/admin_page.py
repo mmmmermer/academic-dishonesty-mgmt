@@ -19,6 +19,8 @@ from config import (
     AUDIT_IMPORT,
     AUDIT_QUERY_BATCH,
     AUDIT_RESTORE,
+    BATCH_IMPORT_COMMIT_EVERY,
+    LIST_PAGE_SIZE,
 )
 from database import SessionLocal
 from models import AuditLog, Blacklist, User
@@ -115,11 +117,14 @@ def _render_management(db):
         )
         if st.button("开始导入", key="admin_import_btn"):
             df = st.session_state["admin_import_df"]
+            imported = 0
+            updated = 0
+            skipped = 0
+            last_imported = 0
+            last_updated = 0
+            batch_counter = 0
             try:
                 with st.spinner("正在导入..."):
-                    imported = 0
-                    updated = 0
-                    skipped = 0
                     for _, row in df.iterrows():
                         sid = str(row["学号"]).strip() if pd.notna(row["学号"]) else ""
                         if not sid:
@@ -155,7 +160,13 @@ def _render_management(db):
                             )
                             db.add(rec)
                             imported += 1
-                    db.commit()
+                        batch_counter += 1
+                        if batch_counter >= BATCH_IMPORT_COMMIT_EVERY:
+                            db.commit()
+                            last_imported, last_updated = imported, updated
+                            batch_counter = 0
+                    if batch_counter > 0:
+                        db.commit()
                     _log_action(
                         AUDIT_IMPORT,
                         target=st.session_state.get("admin_import_filename", ""),
@@ -171,9 +182,11 @@ def _render_management(db):
                 st.success(msg)
                 st.balloons()
                 st.rerun()
-            except Exception as e:
+            except Exception:
                 db.rollback()
-                st.error("导入失败，请检查 Excel 格式（需包含：姓名、学号、专业、原因、处分时间）或联系管理员。")
+                st.error(
+                    f"导入失败，已成功导入 {last_imported} 条，更新 {last_updated} 条；后续数据出错，请检查 Excel 格式（需包含：姓名、学号、专业、原因、处分时间）。"
+                )
 
     st.divider()
     # ---------- 手动新增 ----------
@@ -218,20 +231,55 @@ def _render_management(db):
     if not effective_list:
         st.caption("暂无生效记录。")
     else:
+        st.caption("可按姓名、学号、专业筛选（留空表示不限制）。")
+        ef1, ef2, ef3 = st.columns(3)
+        with ef1:
+            filter_effective_name = st.text_input("姓名筛选", key="admin_effective_filter_name", placeholder="留空不限制")
+        with ef2:
+            filter_effective_sid = st.text_input("学号筛选", key="admin_effective_filter_sid", placeholder="留空不限制")
+        with ef3:
+            filter_effective_major = st.text_input("专业筛选", key="admin_effective_filter_major", placeholder="留空不限制")
+        fn = (filter_effective_name or "").strip()
+        fs = (filter_effective_sid or "").strip()
+        fm = (filter_effective_major or "").strip()
+        filtered_effective = [
+            r for r in effective_list
+            if (not fn or (fn in (r.name or "")))
+            and (not fs or (fs in (r.student_id or "")))
+            and (not fm or (fm in (r.major or "")))
+        ]
+        total_eff = len(filtered_effective)
+        total_pages_eff = max(1, (total_eff + LIST_PAGE_SIZE - 1) // LIST_PAGE_SIZE)
+        page_eff = st.session_state.get("admin_effective_page", 0)
+        page_eff = max(0, min(page_eff, total_pages_eff - 1))
+        st.session_state["admin_effective_page"] = page_eff
+        start_eff = page_eff * LIST_PAGE_SIZE
+        page_effective = filtered_effective[start_eff : start_eff + LIST_PAGE_SIZE]
         df_display = pd.DataFrame(
             [
                 {
-                    "序号": i,
+                    "序号": start_eff + i,
                     "姓名": r.name,
                     "学号": r.student_id,
                     "专业": r.major or "",
                     "原因": (r.reason or "")[:50],
                     "处分日期": str(r.punishment_date) if r.punishment_date else "",
                 }
-                for i, r in enumerate(effective_list, 1)
+                for i, r in enumerate(page_effective, 1)
             ]
         )
         st.dataframe(df_display, use_container_width=True, hide_index=True)
+        if total_eff > LIST_PAGE_SIZE or len(filtered_effective) < len(effective_list):
+            st.caption(f"当前第 {page_eff + 1}/{total_pages_eff} 页，本页 {len(page_effective)} 条（共 {total_eff} 条）。")
+        col_prev_eff, col_next_eff = st.columns(2)
+        with col_prev_eff:
+            if st.button("上一页", key="admin_effective_prev") and page_eff > 0:
+                st.session_state["admin_effective_page"] = page_eff - 1
+                st.rerun()
+        with col_next_eff:
+            if st.button("下一页", key="admin_effective_next") and page_eff < total_pages_eff - 1:
+                st.session_state["admin_effective_page"] = page_eff + 1
+                st.rerun()
 
         del_sid_input = st.text_input("输入要删除的学号", key="del_student_id", placeholder="学号")
         if st.button("软删除（设为已撤销）", key="admin_del_btn") and del_sid_input:
@@ -363,20 +411,55 @@ def _render_management(db):
     if not revoked_list:
         st.caption("暂无已撤销记录。")
     else:
+        st.caption("可按姓名、学号、专业筛选（留空表示不限制）。")
+        rv1, rv2, rv3 = st.columns(3)
+        with rv1:
+            filter_revoked_name = st.text_input("姓名筛选", key="admin_revoked_filter_name", placeholder="留空不限制")
+        with rv2:
+            filter_revoked_sid = st.text_input("学号筛选", key="admin_revoked_filter_sid", placeholder="留空不限制")
+        with rv3:
+            filter_revoked_major = st.text_input("专业筛选", key="admin_revoked_filter_major", placeholder="留空不限制")
+        rn = (filter_revoked_name or "").strip()
+        rs = (filter_revoked_sid or "").strip()
+        rm = (filter_revoked_major or "").strip()
+        filtered_revoked = [
+            r for r in revoked_list
+            if (not rn or (rn in (r.name or "")))
+            and (not rs or (rs in (r.student_id or "")))
+            and (not rm or (rm in (r.major or "")))
+        ]
+        total_rev = len(filtered_revoked)
+        total_pages_rev = max(1, (total_rev + LIST_PAGE_SIZE - 1) // LIST_PAGE_SIZE)
+        page_rev = st.session_state.get("admin_revoked_page", 0)
+        page_rev = max(0, min(page_rev, total_pages_rev - 1))
+        st.session_state["admin_revoked_page"] = page_rev
+        start_rev = page_rev * LIST_PAGE_SIZE
+        page_revoked = filtered_revoked[start_rev : start_rev + LIST_PAGE_SIZE]
         df_revoked = pd.DataFrame(
             [
                 {
-                    "序号": i,
+                    "序号": start_rev + i,
                     "姓名": r.name,
                     "学号": r.student_id,
                     "专业": r.major or "",
                     "原因": (r.reason or "")[:50],
                     "处分日期": str(r.punishment_date) if r.punishment_date else "",
                 }
-                for i, r in enumerate(revoked_list, 1)
+                for i, r in enumerate(page_revoked, 1)
             ]
         )
         st.dataframe(df_revoked, use_container_width=True, hide_index=True)
+        if total_rev > LIST_PAGE_SIZE or len(filtered_revoked) < len(revoked_list):
+            st.caption(f"当前第 {page_rev + 1}/{total_pages_rev} 页，本页 {len(page_revoked)} 条（共 {total_rev} 条）。")
+        col_prev_rev, col_next_rev = st.columns(2)
+        with col_prev_rev:
+            if st.button("上一页", key="admin_revoked_prev") and page_rev > 0:
+                st.session_state["admin_revoked_page"] = page_rev - 1
+                st.rerun()
+        with col_next_rev:
+            if st.button("下一页", key="admin_revoked_next") and page_rev < total_pages_rev - 1:
+                st.session_state["admin_revoked_page"] = page_rev + 1
+                st.rerun()
         restore_sid_input = st.text_input("输入要恢复的学号", key="restore_student_id", placeholder="学号")
         if st.button("恢复为生效", key="admin_restore_btn") and restore_sid_input:
             try:
@@ -525,7 +608,31 @@ def _render_system(db):
             )
             st.dataframe(log_df, use_container_width=True, hide_index=True)
             st.caption(f"共 {len(logs)} 条（最多展示 500 条）。")
-    except Exception as e:
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            col_csv, col_xlsx, _ = st.columns([1, 1, 2])
+            with col_csv:
+                csv_buf = BytesIO()
+                log_df.to_csv(csv_buf, index=False, encoding="utf-8-sig")
+                csv_buf.seek(0)
+                st.download_button(
+                    label="导出 CSV",
+                    data=csv_buf.getvalue(),
+                    file_name=f"审计日志_{stamp}.csv",
+                    mime="text/csv",
+                    key="audit_export_csv",
+                )
+            with col_xlsx:
+                xlsx_buf = BytesIO()
+                log_df.to_excel(xlsx_buf, index=False, engine="openpyxl")
+                xlsx_buf.seek(0)
+                st.download_button(
+                    label="导出 Excel",
+                    data=xlsx_buf.getvalue(),
+                    file_name=f"审计日志_{stamp}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="audit_export_xlsx",
+                )
+    except Exception:
         st.error("加载审计日志失败，请稍后重试。")
 
     st.divider()
@@ -553,25 +660,32 @@ def _render_system(db):
         key="admin_restore_upload",
     )
     if restore_uploaded:
-        st.warning("This will OVERWRITE all current data!")
-        if st.button("🔴 确认恢复 (Confirm Restore)", key="admin_confirm_restore"):
-            try:
-                backup_bytes = restore_uploaded.read()
-                if not backup_bytes:
-                    st.error("上传文件为空，无法恢复。")
-                else:
-                    with open(DATABASE_PATH, "wb") as f:
-                        f.write(backup_bytes)
-                    st.cache_resource.clear()
-                    _log_action(AUDIT_BACKUP, target="数据恢复", details=f"从文件 {restore_uploaded.name} 恢复")
-                    st.success("数据库已恢复，即将刷新页面。")
-                    st.balloons()
-                    time.sleep(2)
-                    st.rerun()
-            except OSError as e:
-                st.error("恢复失败，请确认上传的是有效的 .db 备份文件。")
-            except Exception as e:
-                st.error("恢复过程出错，请稍后重试或联系管理员。")
+        st.warning("此操作将**覆盖**当前数据库，所有未备份的修改将丢失。")
+        restore_confirm_checked = st.checkbox(
+            "我已知晓将覆盖当前数据，确认执行恢复",
+            key="admin_restore_confirm_check",
+        )
+        if restore_confirm_checked:
+            if st.button("🔴 确认恢复 (Confirm Restore)", key="admin_confirm_restore"):
+                try:
+                    backup_bytes = restore_uploaded.read()
+                    if not backup_bytes:
+                        st.error("上传文件为空，无法恢复。")
+                    else:
+                        with open(DATABASE_PATH, "wb") as f:
+                            f.write(backup_bytes)
+                        st.cache_resource.clear()
+                        _log_action(AUDIT_BACKUP, target="数据恢复", details=f"从文件 {restore_uploaded.name} 恢复")
+                        st.success("数据库已恢复，即将刷新页面。")
+                        st.balloons()
+                        time.sleep(2)
+                        st.rerun()
+                except OSError:
+                    st.error("恢复失败，请确认上传的是有效的 .db 备份文件。")
+                except Exception:
+                    st.error("恢复过程出错，请稍后重试或联系管理员。")
+        else:
+            st.caption("请先勾选上方确认框后再执行恢复。")
 
 
 def _render_user_management(db):

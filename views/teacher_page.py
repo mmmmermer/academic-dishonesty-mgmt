@@ -86,9 +86,10 @@ def render_teacher_page():
 
 
 def _render_single_search():
-    """单条查询：输入姓名或学号，展示结果。"""
-    search_input = st.text_input("请输入学生姓名 或 学号", key="teacher_search", placeholder="姓名或学号")
-    search_clicked = st.button("🔍 查询 (Search)", key="teacher_search_btn")
+    """单条查询：输入姓名或学号，展示结果；支持回车提交。"""
+    with st.form("teacher_single_search_form"):
+        search_input = st.text_input("请输入学生姓名 或 学号", key="teacher_search", placeholder="姓名或学号（支持回车查询）")
+        search_clicked = st.form_submit_button("🔍 查询 (Search)")
 
     if not search_clicked:
         return

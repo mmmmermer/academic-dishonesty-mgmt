@@ -1,9 +1,12 @@
 """
-登录页：表单校验、会话写入、登录审计日志
+登录页：表单校验、会话写入、登录审计日志、登录失败限制
 """
+import time
+
 import streamlit as st
 
 from auth import verify_password
+from config import LOGIN_COOLDOWN_SECONDS, LOGIN_FAIL_MAX
 from database import SessionLocal
 from models import AuditLog, User
 
@@ -25,19 +28,36 @@ def render_login_page():
         st.error("请输入用户名和密码。")
         return
 
+    username_stripped = (username or "").strip()
+    records = st.session_state.get("login_fail_records") or {}
+    if username_stripped in records:
+        count, last_ts = records[username_stripped]
+        if count >= LOGIN_FAIL_MAX and (time.time() - last_ts) < LOGIN_COOLDOWN_SECONDS:
+            st.error("登录失败次数过多，请 5 分钟后再试。")
+            return
+        # 冷却期已过则继续尝试，后续失败会重新计数
+
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.username == username).first()
         if not user:
+            _record_login_fail(st.session_state, username_stripped)
             st.error("用户名或密码错误。")
             return
         if not user.is_active:
+            _record_login_fail(st.session_state, username_stripped)
             st.error("该账号已停用，请联系管理员。")
             return
         if not verify_password(password, user.password_hash):
+            _record_login_fail(st.session_state, username_stripped)
             st.error("用户名或密码错误。")
             return
-        # 校验通过：写登录审计日志
+        # 校验通过：清除该账号失败记录
+        if username_stripped in (st.session_state.get("login_fail_records") or {}):
+            rec = st.session_state["login_fail_records"]
+            if username_stripped in rec:
+                del rec[username_stripped]
+        # 写登录审计日志
         log_db = SessionLocal()
         try:
             log_db.add(AuditLog(
@@ -51,14 +71,25 @@ def render_login_page():
             log_db.rollback()
         finally:
             log_db.close()
-        # 写入会话并刷新
+        # 写入会话并刷新，设置最后活动时间供会话超时判断
         st.session_state.logged_in = True
         st.session_state.user_role = user.role
         st.session_state.user_name = user.full_name
         st.session_state.user_id = user.id
-        st.session_state.username = user.username  # 工号，用于水印
+        st.session_state.username = user.username
+        st.session_state.last_activity_at = time.time()
         st.rerun()
     except Exception:
         st.error("登录过程出错，请稍后重试。")
     finally:
         db.close()
+
+
+def _record_login_fail(session_state, username_stripped: str) -> None:
+    """记录一次登录失败，用于同一账号失败次数与冷却。"""
+    records = session_state.get("login_fail_records")
+    if records is None:
+        records = {}
+        session_state["login_fail_records"] = records
+    count, _ = records.get(username_stripped, (0, 0.0))
+    records[username_stripped] = (count + 1, time.time())

@@ -1,7 +1,11 @@
 """
-主入口：会话初始化、水印、导航、登出、启动时自动备份
+主入口：会话初始化、水印、导航、登出、启动时自动备份、会话超时
 """
+import time
+
 import streamlit as st
+
+from config import SESSION_TIMEOUT_MINUTES
 
 # 教师/管理员页面若尚未实现，则使用占位
 try:
@@ -45,6 +49,10 @@ def _init_session_state():
         st.session_state.user_id = 0
     if "username" not in st.session_state:
         st.session_state.username = ""
+    if "last_activity_at" not in st.session_state:
+        st.session_state.last_activity_at = 0.0
+    if "login_fail_records" not in st.session_state:
+        st.session_state.login_fail_records = {}
 
 
 def _inject_watermark():
@@ -103,6 +111,21 @@ def main():
     if not st.session_state.logged_in:
         render_login_page()
         return
+
+    # 会话超时：先检查距上次活动是否超时，再更新最后活动时间
+    now = time.time()
+    prev_activity = st.session_state.last_activity_at
+    timeout_seconds = SESSION_TIMEOUT_MINUTES * 60
+    if prev_activity > 0 and (now - prev_activity) > timeout_seconds:
+        st.session_state.logged_in = False
+        st.session_state.user_role = ""
+        st.session_state.user_name = ""
+        st.session_state.user_id = 0
+        st.session_state.username = ""
+        st.session_state.last_activity_at = 0.0
+        st.warning("登录已超时，请重新登录。")
+        st.rerun()
+    st.session_state.last_activity_at = now
 
     if st.session_state.user_role == "teacher":
         render_teacher_page()
