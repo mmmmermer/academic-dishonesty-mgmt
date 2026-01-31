@@ -1,18 +1,6 @@
-# 校园学术失信人员管理系统依赖
-# Python 3.9+
-
-# Web 与界面
-streamlit>=1.28.0
-
-# 数据库
-sqlalchemy>=2.0.0
-
-# 密码加密
-bcrypt>=4.0.0
-
-# 数据处理与 Excel
-pandas>=2.0.0
-openpyxl>=3.1.0
-
-# 图表（管理员仪表盘）
-plotly>=5.18.0
+streamlit
+sqlalchemy
+bcrypt
+pandas
+openpyxl
+plotly
