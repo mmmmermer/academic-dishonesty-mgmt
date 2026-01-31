@@ -3,4 +3,5 @@ sqlalchemy
 bcrypt
 pandas
 openpyxl
+xlrd
 plotly

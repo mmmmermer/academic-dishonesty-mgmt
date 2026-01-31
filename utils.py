@@ -49,6 +49,18 @@ def mask_student_id(text: Any) -> str:
     return s[:3] + "*" * (len(s) - 7) + s[-4:]
 
 
+def _get_excel_engine(uploaded_file: Any) -> str:
+    """
+    根据文件名选择 Excel 引擎：.xls 使用 xlrd，其余使用 openpyxl。
+    便于兼容旧版 .xls 格式。
+    """
+    name = getattr(uploaded_file, "name", None) or ""
+    name_lower = (name or "").lower()
+    if name_lower.endswith(".xls") and not name_lower.endswith(".xlsx"):
+        return "xlrd"
+    return "openpyxl"
+
+
 def parse_blacklist_excel(uploaded_file: Any) -> pd.DataFrame:
     """
     解析黑名单 Excel：校验必需列、清洗学号后返回 DataFrame。
@@ -66,9 +78,10 @@ def parse_blacklist_excel(uploaded_file: Any) -> pd.DataFrame:
             io = BytesIO(raw)
         else:
             io = uploaded_file
-        df = pd.read_excel(io, engine="openpyxl")
+        engine = _get_excel_engine(uploaded_file)
+        df = pd.read_excel(io, engine=engine)
     except Exception as e:
-        raise ValueError(f"无法读取 Excel 文件，请确认格式为 .xlsx。错误信息：{e!s}") from e
+        raise ValueError(f"无法读取 Excel 文件，请确认格式为 .xlsx 或 .xls。错误信息：{e!s}") from e
 
     missing = [c for c in REQUIRED_EXCEL_COLUMNS if c not in df.columns]
     if missing:
@@ -95,9 +108,10 @@ def parse_batch_check_excel(uploaded_file: Any) -> pd.DataFrame:
             io = BytesIO(raw)
         else:
             io = uploaded_file
-        df = pd.read_excel(io, engine="openpyxl")
+        engine = _get_excel_engine(uploaded_file)
+        df = pd.read_excel(io, engine=engine)
     except Exception as e:
-        raise ValueError(f"无法读取 Excel 文件，请确认格式为 .xlsx。错误信息：{e!s}") from e
+        raise ValueError(f"无法读取 Excel 文件，请确认格式为 .xlsx 或 .xls。错误信息：{e!s}") from e
 
     if BATCH_CHECK_ID_COLUMN not in df.columns:
         raise ValueError("缺少「学号」列。请确保表格至少包含一列：学号。")

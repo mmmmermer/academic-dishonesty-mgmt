@@ -46,7 +46,7 @@ class AuditLog(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     operator_name = Column(String(64), nullable=False, comment="操作人姓名(冗余存储)")
-    action_type = Column(String(32), nullable=False, comment="LOGIN, QUERY_BATCH, IMPORT, ADD, DELETE, BACKUP")
+    action_type = Column(String(32), nullable=False, comment="LOGIN, QUERY_SINGLE, QUERY_BATCH, IMPORT, ADD, DELETE, RESTORE, BACKUP")
     target = Column(String(256), nullable=True, comment="操作对象简述")
     details = Column(Text, nullable=True, comment="变更详情(JSON/Text)")
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, comment="操作时间")

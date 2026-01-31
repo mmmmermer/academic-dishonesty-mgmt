@@ -6,6 +6,7 @@ from io import BytesIO
 import pandas as pd
 import streamlit as st
 
+from config import AUDIT_QUERY_BATCH, AUDIT_QUERY_SINGLE
 from database import SessionLocal
 from models import AuditLog, Blacklist
 from utils import clean_student_id, parse_batch_check_excel
@@ -112,6 +113,8 @@ def _render_single_search():
     finally:
         db.close()
 
+    _log_teacher_action(AUDIT_QUERY_SINGLE, target="", details="单条查询")
+
     if not records:
         st.success("✅ 未查询到违规记录，该生信用良好。")
         return
@@ -136,8 +139,8 @@ PAGE_SIZE = 10  # 每页最多 10 条违规学生信息
 def _render_batch_check():
     """批量智能比对：上传 Excel，按学号与黑名单比对，展示结果并支持下载报告；表格分页每页 10 条。"""
     st.subheader("批量智能比对")
-    st.caption("上传包含「学号」列的 Excel (.xlsx)，与生效名单比对；可下载比对结果报告。")
-    uploaded = st.file_uploader("选择 Excel 文件", type=["xlsx"], key="teacher_batch_file")
+    st.caption("上传包含「学号」列的 Excel (.xlsx / .xls)，与生效名单比对；可下载比对结果报告。")
+    uploaded = st.file_uploader("选择 Excel 文件", type=["xlsx", "xls"], key="teacher_batch_file")
     run_batch = st.button("开始比对", key="teacher_batch_btn")
 
     if uploaded and run_batch:
@@ -166,7 +169,7 @@ def _render_batch_check():
         finally:
             db.close()
 
-        _log_teacher_action("QUERY_BATCH", target=uploaded.name, details=f"共 {len(student_ids)} 条，命中 {len(matched)} 条")
+        _log_teacher_action(AUDIT_QUERY_BATCH, target=uploaded.name, details=f"共 {len(student_ids)} 条，命中 {len(matched)} 条")
 
         if not matched:
             st.success("✅ 未查询到违规记录，名单内学生信用良好。")

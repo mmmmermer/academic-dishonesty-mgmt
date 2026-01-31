@@ -11,6 +11,15 @@ import plotly.express as px
 import streamlit as st
 from sqlalchemy import func
 
+from config import (
+    AUDIT_ACTION_TYPES,
+    AUDIT_ADD,
+    AUDIT_BACKUP,
+    AUDIT_DELETE,
+    AUDIT_IMPORT,
+    AUDIT_QUERY_BATCH,
+    AUDIT_RESTORE,
+)
 from database import SessionLocal
 from models import AuditLog, Blacklist, User
 from utils import (
@@ -86,7 +95,7 @@ def _render_management(db):
     """Tab 2: 名单管理 - 批量导入、手动新增、列表与软删除。"""
     # ---------- 批量导入 ----------
     st.subheader("批量导入")
-    uploaded = st.file_uploader("上传 Excel (.xlsx)", type=["xlsx"], key="admin_import_file")
+    uploaded = st.file_uploader("上传 Excel (.xlsx / .xls)", type=["xlsx", "xls"], key="admin_import_file")
     # 上传新文件时解析并缓存，用于预览与导入
     if uploaded:
         if st.session_state.get("admin_import_filename") != uploaded.name:
@@ -148,7 +157,7 @@ def _render_management(db):
                             imported += 1
                     db.commit()
                     _log_action(
-                        "IMPORT",
+                        AUDIT_IMPORT,
                         target=st.session_state.get("admin_import_filename", ""),
                         details=f"新增 {imported} 条，更新 {updated} 条" + (f"，跳过 {skipped} 行" if skipped else ""),
                     )
@@ -195,7 +204,7 @@ def _render_management(db):
                             )
                             db.add(rec)
                             db.commit()
-                            _log_action("ADD", target=add_name, details=f"学号 {sid_clean[:8]}***")
+                            _log_action(AUDIT_ADD, target=add_name, details=f"学号 {sid_clean[:8]}***")
                             st.success("已添加。")
                             st.rerun()
                 except Exception as e:
@@ -240,12 +249,12 @@ def _render_management(db):
                         with st.spinner("正在更新..."):
                             rec.status = 0
                             db.commit()
-                            _log_action("DELETE", target=sid_clean[:16], details=f"软删除：{rec.name} {sid_clean[:8]}***")
+                            _log_action(AUDIT_DELETE, target=sid_clean[:16], details=f"软删除：{rec.name} {sid_clean[:8]}***")
                         st.success("已软删除。")
                         st.rerun()
-            except Exception as e:
+            except Exception:
                 db.rollback()
-                st.error(f"操作失败：{e!s}")
+                st.error("删除操作失败，请稍后重试。")
 
         # ---------- 初始化名单（二次确认） ----------
         st.divider()
@@ -264,7 +273,7 @@ def _render_management(db):
                         with st.spinner("正在初始化..."):
                             n = db.query(Blacklist).filter(Blacklist.status == 1).update({Blacklist.status: 0})
                             db.commit()
-                            _log_action("DELETE", target="初始化名单", details=f"共 {n} 条生效记录设为已撤销")
+                            _log_action(AUDIT_DELETE, target="初始化名单", details=f"共 {n} 条生效记录设为已撤销")
                         if "admin_show_init_confirm" in st.session_state:
                             del st.session_state["admin_show_init_confirm"]
                         st.success("名单已初始化，生效名单已清空。")
@@ -298,9 +307,9 @@ def _render_management(db):
                     else:
                         st.session_state["admin_edit_id"] = rec.id
                         st.rerun()
-            except Exception as e:
+            except Exception:
                 db.rollback()
-                st.error(f"操作失败：{e!s}")
+                st.error("查找记录失败，请检查学号后重试。")
 
     # 编辑表单（在列表外，避免 db 作用域问题）
     if st.session_state.get("admin_edit_id"):
@@ -332,7 +341,7 @@ def _render_management(db):
                         rec.reason = (edit_reason or "").strip() or None
                         rec.punishment_date = edit_date
                         edit_db.commit()
-                        _log_action("ADD", target=f"编辑记录 {edit_id}", details=f"{rec.name} {rec.student_id[:8]}***")
+                        _log_action(AUDIT_ADD, target=f"编辑记录 {edit_id}", details=f"{rec.name} {rec.student_id[:8]}***")
                         if "admin_edit_id" in st.session_state:
                             del st.session_state["admin_edit_id"]
                         st.success("已保存修改。")
@@ -347,10 +356,58 @@ def _render_management(db):
         finally:
             edit_db.close()
 
+    # ---------- 已撤销名单与恢复 ----------
+    st.divider()
+    st.subheader("已撤销名单与恢复")
+    revoked_list = db.query(Blacklist).filter(Blacklist.status == 0).order_by(Blacklist.id).all()
+    if not revoked_list:
+        st.caption("暂无已撤销记录。")
+    else:
+        df_revoked = pd.DataFrame(
+            [
+                {
+                    "序号": i,
+                    "姓名": r.name,
+                    "学号": r.student_id,
+                    "专业": r.major or "",
+                    "原因": (r.reason or "")[:50],
+                    "处分日期": str(r.punishment_date) if r.punishment_date else "",
+                }
+                for i, r in enumerate(revoked_list, 1)
+            ]
+        )
+        st.dataframe(df_revoked, use_container_width=True, hide_index=True)
+        restore_sid_input = st.text_input("输入要恢复的学号", key="restore_student_id", placeholder="学号")
+        if st.button("恢复为生效", key="admin_restore_btn") and restore_sid_input:
+            try:
+                sid_restore = clean_student_id(restore_sid_input.strip())
+                if not sid_restore:
+                    st.error("请输入有效学号。")
+                else:
+                    rec = db.query(Blacklist).filter(
+                        Blacklist.status == 0, Blacklist.student_id == sid_restore
+                    ).first()
+                    if not rec:
+                        st.error("未找到该学号的已撤销记录。")
+                    else:
+                        with st.spinner("正在恢复..."):
+                            rec.status = 1
+                            db.commit()
+                            _log_action(
+                                AUDIT_RESTORE,
+                                target=sid_restore[:16],
+                                details=f"恢复：{rec.name} {sid_restore[:8]}***",
+                            )
+                        st.success("已恢复为生效。")
+                        st.rerun()
+            except Exception:
+                db.rollback()
+                st.error("恢复失败，请稍后重试。")
+
     st.divider()
     st.subheader("批量查询")
     st.caption("上传包含「学号」列的 Excel，与生效名单比对；可下载比对结果报告（含完整学号）。")
-    admin_batch_file = st.file_uploader("选择 Excel 文件", type=["xlsx"], key="admin_batch_check_file")
+    admin_batch_file = st.file_uploader("选择 Excel 文件", type=["xlsx", "xls"], key="admin_batch_check_file")
     if st.button("开始比对", key="admin_batch_check_btn") and admin_batch_file:
         try:
             with st.spinner("正在解析并比对..."):
@@ -368,7 +425,7 @@ def _render_management(db):
                     .all()
                 )
                 _log_action(
-                    "QUERY_BATCH",
+                    AUDIT_QUERY_BATCH,
                     target=admin_batch_file.name,
                     details=f"共 {len(student_ids_batch)} 条，命中 {len(matched_batch)} 条",
                 )
@@ -405,10 +462,6 @@ def _render_management(db):
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key="admin_batch_download",
                     )
-
-
-# 审计日志操作类型选项（与 models 一致）
-AUDIT_ACTION_TYPES = ["LOGIN", "QUERY_BATCH", "IMPORT", "ADD", "DELETE", "BACKUP"]
 
 
 def _render_system(db):
@@ -510,7 +563,7 @@ def _render_system(db):
                     with open(DATABASE_PATH, "wb") as f:
                         f.write(backup_bytes)
                     st.cache_resource.clear()
-                    _log_action("BACKUP", target="数据恢复", details=f"从文件 {restore_uploaded.name} 恢复")
+                    _log_action(AUDIT_BACKUP, target="数据恢复", details=f"从文件 {restore_uploaded.name} 恢复")
                     st.success("数据库已恢复，即将刷新页面。")
                     st.balloons()
                     time.sleep(2)
@@ -573,7 +626,7 @@ def _render_user_management(db):
                             )
                             db.add(u)
                             db.commit()
-                            _log_action("ADD", target=f"用户 {new_username}", details=f"角色 {new_role}")
+                            _log_action(AUDIT_ADD, target=f"用户 {new_username}", details=f"角色 {new_role}")
                             st.success("用户已添加。")
                             st.rerun()
                 except Exception:
@@ -603,7 +656,7 @@ def _render_user_management(db):
                                 reset_password.encode("utf-8"), bcrypt.gensalt()
                             ).decode("utf-8")
                             db.commit()
-                            _log_action("ADD", target=f"密码重置 {username}", details="")
+                            _log_action(AUDIT_ADD, target=f"密码重置 {username}", details="")
                             st.success("密码已重置。")
                             st.rerun()
                 except Exception:
@@ -628,7 +681,7 @@ def _render_user_management(db):
                         target_user.is_active = not target_user.is_active
                         db.commit()
                         status = "启用" if target_user.is_active else "禁用"
-                        _log_action("ADD", target=f"账号{status} {target_username}", details="")
+                        _log_action(AUDIT_ADD, target=f"账号{status} {target_username}", details="")
                         st.success(f"已{status} {target_username}。")
                         st.rerun()
                 except Exception:
