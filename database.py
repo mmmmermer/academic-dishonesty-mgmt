@@ -1,6 +1,6 @@
 """
-数据库连接与会话配置
-使用 SQLAlchemy 配置 SQLite 引擎和会话。
+数据库连接与会话配置。使用 SQLAlchemy 配置 SQLite 引擎和会话。
+db_session() 为上下文管理器，推荐在 with 块内使用；SessionLocal() 需调用方自行 close。
 """
 import os
 from contextlib import contextmanager

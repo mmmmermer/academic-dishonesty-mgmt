@@ -1,12 +1,13 @@
 """
-登录页：表单校验、会话写入、登录审计日志、登录失败限制
+登录页：表单校验、会话写入、登录审计日志、登录失败次数与冷却限制。
+由 app 在未登录时调用；登录成功后写入 session_state 并 rerun。
 """
 import time
 
 import streamlit as st
 
 from auth import verify_password
-from config import LOGIN_COOLDOWN_SECONDS, LOGIN_FAIL_MAX
+from config import LOGIN_COOLDOWN_SECONDS, LOGIN_FAIL_MAX, USERNAME_MAX_LEN
 from database import SessionLocal
 from models import AuditLog, User
 
@@ -29,6 +30,9 @@ def render_login_page():
         return
 
     username_stripped = (username or "").strip()
+    if len(username_stripped) > USERNAME_MAX_LEN:
+        st.error("用户名长度超出限制，请检查后重试。")
+        return
     records = st.session_state.get("login_fail_records") or {}
     if username_stripped in records:
         count, last_ts = records[username_stripped]
@@ -39,7 +43,7 @@ def render_login_page():
 
     db = SessionLocal()
     try:
-        user = db.query(User).filter(User.username == username).first()
+        user = db.query(User).filter(User.username == username_stripped).first()
         if not user:
             _record_login_fail(st.session_state, username_stripped)
             st.error("用户名或密码错误。")

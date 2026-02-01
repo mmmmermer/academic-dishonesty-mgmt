@@ -6,6 +6,11 @@ from typing import Union
 
 import bcrypt
 
+try:
+    from config import PASSWORD_MAX_BYTES
+except ImportError:
+    PASSWORD_MAX_BYTES = 72
+
 
 def verify_password(plain_password: str, hashed_password: Union[str, bytes]) -> bool:
     """
@@ -20,6 +25,9 @@ def verify_password(plain_password: str, hashed_password: Union[str, bytes]) -> 
         return False
     try:
         plain_bytes = plain_password.encode("utf-8")
+        # BCrypt 有效输入有上限，超长直接拒绝，避免无谓计算与异常
+        if len(plain_bytes) > PASSWORD_MAX_BYTES:
+            return False
         if isinstance(hashed_password, str):
             hashed_bytes = hashed_password.encode("utf-8")
         else:

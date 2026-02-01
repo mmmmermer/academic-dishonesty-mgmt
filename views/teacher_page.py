@@ -1,15 +1,16 @@
 """
-教师端页面：学术诚信档案查询（只读）、批量智能比对
+教师端页面：学术诚信档案查询（只读）、批量智能比对、个人操作记录。
+单条查询支持姓名或学号；批量比对支持上传 Excel 与生效名单比对，支持每页条数选择。
 """
 from io import BytesIO
 
 import pandas as pd
 import streamlit as st
 
-from config import AUDIT_QUERY_BATCH, AUDIT_QUERY_SINGLE
+from config import AUDIT_QUERY_BATCH, AUDIT_QUERY_SINGLE, LABEL_PAGE_SIZE, LIST_PAGE_SIZE_OPTIONS
 from database import SessionLocal, db_session
 from models import AuditLog, Blacklist
-from utils import clean_student_id, parse_batch_check_excel
+from utils import clean_student_id, parse_batch_check_excel, validate_student_id
 
 
 def _log_teacher_action(action_type: str, target: str = "", details: str = ""):
@@ -97,10 +98,17 @@ def _render_single_search():
         st.error("请输入姓名或学号后再查询。")
         return
 
+    clean_raw = clean_student_id(raw)
+    # 若输入像学号（主要为数字且较长），则做学号格式校验，避免超长或非法学号
+    if clean_raw and len(clean_raw) >= 6 and sum(c.isdigit() for c in clean_raw) >= len(clean_raw) // 2:
+        ok, err = validate_student_id(raw)
+        if not ok:
+            st.error(err or "学号格式有误，请检查后重试。")
+            return
+
     db = SessionLocal()
     try:
         with st.spinner("正在查询..."):
-            clean_raw = clean_student_id(raw)
             q = db.query(Blacklist).filter(Blacklist.status == 1)
             q = q.filter(
                 (Blacklist.name == raw) | (Blacklist.student_id == clean_raw)
@@ -132,7 +140,9 @@ def _render_single_search():
     st.dataframe(single_table, use_container_width=True, hide_index=True)
 
 
-PAGE_SIZE = 10  # 每页最多 10 条违规学生信息
+# 教师端批量比对默认每页条数（可选 10/20/50）
+TEACHER_BATCH_PAGE_SIZE_DEFAULT = 10
+TEACHER_BATCH_PAGE_OPTIONS = [o for o in LIST_PAGE_SIZE_OPTIONS if o <= 50]
 
 
 def _render_batch_check():
@@ -195,14 +205,25 @@ def _render_batch_check():
 
     matched_store = st.session_state["teacher_batch_matched"]
     total = len(matched_store)
-    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    page_size_t = st.session_state.get("teacher_batch_page_size", TEACHER_BATCH_PAGE_SIZE_DEFAULT)
+    if page_size_t not in TEACHER_BATCH_PAGE_OPTIONS:
+        page_size_t = TEACHER_BATCH_PAGE_SIZE_DEFAULT
+    total_pages = max(1, (total + page_size_t - 1) // page_size_t)
     current_page = st.session_state.get("teacher_batch_page", 0)
     current_page = max(0, min(current_page, total_pages - 1))
     st.session_state["teacher_batch_page"] = current_page
 
-    start = current_page * PAGE_SIZE
-    end = min(start + PAGE_SIZE, total)
+    start = current_page * page_size_t
+    end = min(start + page_size_t, total)
     page_data = matched_store[start:end]
+
+    # 每页条数选择（变更时重置到第 1 页）
+    idx_t = TEACHER_BATCH_PAGE_OPTIONS.index(page_size_t) if page_size_t in TEACHER_BATCH_PAGE_OPTIONS else 0
+    new_ps = st.selectbox(LABEL_PAGE_SIZE, TEACHER_BATCH_PAGE_OPTIONS, index=idx_t, key="teacher_batch_page_size_select")
+    if new_ps != page_size_t:
+        st.session_state["teacher_batch_page_size"] = new_ps
+        st.session_state["teacher_batch_page"] = 0
+        st.rerun()
 
     st.error(f"⚠️ 共命中 {total} 条失信/违规记录，请核实。（当前第 {current_page + 1}/{total_pages} 页）")
     batch_table = pd.DataFrame([

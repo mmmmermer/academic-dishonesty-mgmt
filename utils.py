@@ -5,11 +5,18 @@ import os
 import shutil
 from datetime import datetime
 from io import BytesIO
-from typing import Any
+from typing import Any, Tuple
 
 import pandas as pd  # type: ignore[reportMissingImports]
 
 from database import DATABASE_DIR
+
+try:
+    from config import MAX_IMPORT_ROWS, STUDENT_ID_MAX_LEN, STUDENT_ID_MIN_LEN
+except ImportError:
+    STUDENT_ID_MIN_LEN = 1
+    STUDENT_ID_MAX_LEN = 32
+    MAX_IMPORT_ROWS = 10000
 
 # 数据库文件路径
 DATABASE_PATH = os.path.join(DATABASE_DIR, "database.db")
@@ -34,6 +41,20 @@ def clean_student_id(text: Any) -> str:
     s = "".join(s.split())
     s = s.translate(FULL_TO_HALF_DIGITS)
     return s
+
+
+def validate_student_id(raw: Any) -> Tuple[bool, str]:
+    """
+    校验学号：清洗后检查长度在允许范围内。
+    :param raw: 用户输入的学号（任意类型，会先清洗）
+    :return: (是否有效, 错误提示)；有效时错误提示为空字符串
+    """
+    s = clean_student_id(raw)
+    if len(s) < STUDENT_ID_MIN_LEN:
+        return False, "学号不能为空。"
+    if len(s) > STUDENT_ID_MAX_LEN:
+        return False, f"学号长度不能超过 {STUDENT_ID_MAX_LEN} 位。"
+    return True, ""
 
 
 def mask_student_id(text: Any) -> str:
@@ -86,6 +107,8 @@ def parse_blacklist_excel(uploaded_file: Any) -> pd.DataFrame:
     missing = [c for c in REQUIRED_EXCEL_COLUMNS if c not in df.columns]
     if missing:
         raise ValueError(f"缺少必要列：{', '.join(missing)}。请确保表格包含：{', '.join(REQUIRED_EXCEL_COLUMNS)}。")
+    if len(df) > MAX_IMPORT_ROWS:
+        raise ValueError(f"单次导入不得超过 {MAX_IMPORT_ROWS} 行，请分批导入。")
 
     df["学号"] = df["学号"].astype(str).map(clean_student_id)
     return df
@@ -115,6 +138,8 @@ def parse_batch_check_excel(uploaded_file: Any) -> pd.DataFrame:
 
     if BATCH_CHECK_ID_COLUMN not in df.columns:
         raise ValueError("缺少「学号」列。请确保表格至少包含一列：学号。")
+    if len(df) > MAX_IMPORT_ROWS:
+        raise ValueError(f"批量比对单次不得超过 {MAX_IMPORT_ROWS} 行，请分批上传。")
 
     df = df.copy()
     df[BATCH_CHECK_ID_COLUMN] = df[BATCH_CHECK_ID_COLUMN].astype(str).map(clean_student_id)
