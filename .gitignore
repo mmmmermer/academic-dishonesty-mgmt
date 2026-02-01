@@ -3,6 +3,9 @@
 *.db-journal
 backups/
 
+# 服务端 session 文件（含 token，不提交）
+sessions.json
+
 # 忽略 Python 缓存
 __pycache__/
 *.py[cod]

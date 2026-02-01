@@ -81,6 +81,29 @@ except ImportError:
         pass
 
 from views.login import render_login_page
+from session_store import delete_session, get_session
+
+
+def _restore_session_from_sid():
+    """
+    若当前未登录但 URL 带 sid，则从服务端 session 恢复登录态（解决刷新掉线）。
+    无效或过期的 sid 会从 URL 中移除。
+    """
+    if st.session_state.get(SESSION_KEY_LOGGED_IN):
+        return
+    sid = st.query_params.get("sid")
+    if not sid:
+        return
+    data = get_session(sid)
+    if not data:
+        del st.query_params["sid"]
+        return
+    st.session_state[SESSION_KEY_LOGGED_IN] = True
+    st.session_state[SESSION_KEY_USER_ID] = data.get("user_id", 0)
+    st.session_state[SESSION_KEY_USERNAME] = data.get("username", "")
+    st.session_state[SESSION_KEY_USER_ROLE] = data.get("role", "")
+    st.session_state[SESSION_KEY_USER_NAME] = data.get("full_name", "")
+    st.session_state[SESSION_KEY_LAST_ACTIVITY] = time.time()
 
 
 def _run_auto_backup_once():
@@ -157,6 +180,10 @@ def _render_sidebar():
             st.caption(f"**{LABEL_ROLE}**：{role_label}")
             st.divider()
             if st.button(LABEL_LOGOUT, key="logout_btn"):
+                sid = st.query_params.get("sid")
+                if sid:
+                    delete_session(sid)
+                    del st.query_params["sid"]
                 st.session_state[SESSION_KEY_LOGGED_IN] = False
                 st.session_state[SESSION_KEY_USER_ROLE] = ""
                 st.session_state[SESSION_KEY_USER_NAME] = ""
@@ -176,6 +203,10 @@ def _check_session_timeout() -> bool:
     timeout_seconds = SESSION_TIMEOUT_MINUTES * 60
     warn_seconds = SESSION_TIMEOUT_WARN_MINUTES * 60
     if prev > 0 and (now - prev) > timeout_seconds:
+        sid = st.query_params.get("sid")
+        if sid:
+            delete_session(sid)
+            del st.query_params["sid"]
         st.session_state[SESSION_KEY_LOGGED_IN] = False
         st.session_state[SESSION_KEY_USER_ROLE] = ""
         st.session_state[SESSION_KEY_USER_NAME] = ""
@@ -193,12 +224,17 @@ def _check_session_timeout() -> bool:
 
 
 def main():
-    st.set_page_config(page_title="学术失信人员管理系统", layout="wide")
+    _init_session_state()
+    _restore_session_from_sid()
+    # 未登录时侧栏折叠（登录页不占左侧），登录后侧栏展开
+    sidebar_state = "expanded" if st.session_state.get(SESSION_KEY_LOGGED_IN) else "collapsed"
+    st.set_page_config(page_title="学术失信人员管理系统", layout="wide", initial_sidebar_state=sidebar_state)
     try:
-        _init_session_state()
         _run_auto_backup_once()
         _inject_watermark()
-        _render_sidebar()
+        # 仅登录后渲染侧栏导航，登录页不显示左侧栏内容
+        if st.session_state.get(SESSION_KEY_LOGGED_IN):
+            _render_sidebar()
 
         if not st.session_state.get(SESSION_KEY_LOGGED_IN):
             render_login_page()

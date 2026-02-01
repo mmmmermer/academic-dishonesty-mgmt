@@ -33,34 +33,42 @@ from config import (
 )
 from database import SessionLocal
 from models import AuditLog, User
+from session_store import create_session
 
 
 def render_login_page():
     """渲染登录页：工号、密码表单；校验后更新 session_state 并 rerun，失败则 st.error。"""
-    st.title(TITLE_APP)
-    st.subheader(SUBTITLE_LOGIN)
-
-    with st.form("login_form"):
-        username = st.text_input(LABEL_LOGIN_USERNAME, key="login_username")
-        password = st.text_input(LABEL_LOGIN_PASSWORD, type="password", key="login_password")
-        submitted = st.form_submit_button(BTN_LOGIN)
+    # 使用中间列收窄登录区域，避免输入框占满全屏
+    _, col_center, _ = st.columns([1, 2, 1])
+    with col_center:
+        st.title(TITLE_APP)
+        st.subheader(SUBTITLE_LOGIN)
+        with st.form("login_form"):
+            username = st.text_input(LABEL_LOGIN_USERNAME, key="login_username")
+            password = st.text_input(LABEL_LOGIN_PASSWORD, type="password", key="login_password")
+            submitted = st.form_submit_button(BTN_LOGIN)
 
     if not submitted:
         return
 
+    def _show_error(msg: str) -> None:
+        _, c, _ = st.columns([1, 2, 1])
+        with c:
+            st.error(msg)
+
     if not username or not password:
-        st.error(MSG_ENTER_USERNAME_PASSWORD)
+        _show_error(MSG_ENTER_USERNAME_PASSWORD)
         return
 
     username_stripped = (username or "").strip()
     if len(username_stripped) > USERNAME_MAX_LEN:
-        st.error(MSG_USERNAME_TOO_LONG)
+        _show_error(MSG_USERNAME_TOO_LONG)
         return
     records = st.session_state.get(SESSION_KEY_LOGIN_FAIL_RECORDS) or {}
     if username_stripped in records:
         count, last_ts = records[username_stripped]
         if count >= LOGIN_FAIL_MAX and (time.time() - last_ts) < LOGIN_COOLDOWN_SECONDS:
-            st.error(MSG_LOGIN_TOO_MANY_FAIL)
+            _show_error(MSG_LOGIN_TOO_MANY_FAIL)
             return
         # 冷却期已过则继续尝试，后续失败会重新计数
 
@@ -69,15 +77,15 @@ def render_login_page():
         user = db.query(User).filter(User.username == username_stripped).first()
         if not user:
             _record_login_fail(st.session_state, username_stripped)
-            st.error(MSG_LOGIN_WRONG)
+            _show_error(MSG_LOGIN_WRONG)
             return
         if not user.is_active:
             _record_login_fail(st.session_state, username_stripped)
-            st.error(MSG_ACCOUNT_DISABLED)
+            _show_error(MSG_ACCOUNT_DISABLED)
             return
         if not verify_password(password, user.password_hash):
             _record_login_fail(st.session_state, username_stripped)
-            st.error(MSG_LOGIN_WRONG)
+            _show_error(MSG_LOGIN_WRONG)
             return
         # 校验通过：清除该账号失败记录
         rec = st.session_state.get(SESSION_KEY_LOGIN_FAIL_RECORDS)
@@ -97,16 +105,18 @@ def render_login_page():
             log_db.rollback()
         finally:
             log_db.close()
-        # 写入会话并刷新，设置最后活动时间供会话超时判断
+        # 写入会话并刷新；写入 URL 的 sid 以便刷新页面后仍能恢复登录态
         st.session_state[SESSION_KEY_LOGGED_IN] = True
         st.session_state[SESSION_KEY_USER_ROLE] = user.role
         st.session_state[SESSION_KEY_USER_NAME] = user.full_name
         st.session_state[SESSION_KEY_USER_ID] = user.id
         st.session_state[SESSION_KEY_USERNAME] = user.username
         st.session_state[SESSION_KEY_LAST_ACTIVITY] = time.time()
+        token = create_session(user.id, user.username, user.role, user.full_name)
+        st.query_params["sid"] = token
         st.rerun()
     except Exception:
-        st.error(MSG_LOGIN_ERROR)
+        _show_error(MSG_LOGIN_ERROR)
     finally:
         db.close()
 
