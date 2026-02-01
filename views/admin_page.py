@@ -3,7 +3,7 @@
 由 app 根据侧边栏导航（admin_nav_radio）渲染对应板块；名单支持分页、排序、每页条数、学号校验。
 """
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from io import BytesIO
 
 import bcrypt
@@ -18,32 +18,64 @@ from config import (
     AUDIT_BACKUP,
     AUDIT_DELETE,
     AUDIT_IMPORT,
-    AUDIT_QUERY_BATCH,
     AUDIT_RESTORE,
+    AUDIT_TYPE_NAMES,
     BATCH_IMPORT_COMMIT_EVERY,
+    CAPTION_CONFIRM_RESTORE_DB,
+    CAPTION_FILTER_BY_NAME_SID_MAJOR,
+    EMPTY_NO_EFFECTIVE,
+    EMPTY_NO_RECORDS,
+    EMPTY_NO_REVOKED,
+    EMPTY_NO_USER,
+    LABEL_DISPLAY_OPTIONS_EXPANDER,
     LABEL_INIT_LIST,
+    LABEL_NAME,
     LABEL_PAGE_SIZE,
+    LABEL_REASON,
     LABEL_SORT_COLUMN,
     LABEL_DISPLAY_AND_SORT,
+    LABEL_MAJOR,
+    LABEL_PUNISHMENT_DATE,
+    LABEL_SELECT_PANEL,
     LABEL_SORT_ORDER,
+    LABEL_STUDENT_ID,
     LABEL_TABLE_SORT,
     LIST_PAGE_SIZE,
     LIST_PAGE_SIZE_OPTIONS,
     MIME_XLSX,
+    MSG_DB_READ_FAIL,
+    MSG_DB_RESTORE_FAIL,
     MSG_ENTER_VALID_SID,
+    MSG_NOT_FOUND_EFFECTIVE,
+    MSG_NOT_FOUND_REVOKED,
+    MSG_TRY_AGAIN,
+    MSG_TRY_AGAIN_OR_ADMIN,
+    MSG_UPLOAD_EMPTY,
+    MSG_CONFIRM_INIT_LIST,
     PASSWORD_MIN_LEN,
     PLACEHOLDER_FILTER_EMPTY,
+    ROLE_ADMIN,
+    ROLE_TEACHER,
+    SESSION_KEY_USER_NAME,
+    SESSION_KEY_USERNAME,
     SORT_ORDER_ASC,
     SORT_ORDER_OPTIONS,
+    SUCCESS_ADDED,
+    SUCCESS_DB_RESTORED,
+    SUCCESS_IMPORT_DONE,
+    SUCCESS_INIT_LIST,
+    SUCCESS_PWD_RESET,
+    SUCCESS_SAVED,
     USERNAME_MAX_LEN,
 )
 from database import SessionLocal, db_session
 from models import AuditLog, Blacklist, User
 from utils import (
     DATABASE_PATH,
+    REQUIRED_EXCEL_COLUMNS,
+    cell_str,
     clean_student_id,
     get_db_file_bytes,
-    parse_batch_check_excel,
     parse_blacklist_excel,
     validate_student_id,
 )
@@ -53,7 +85,7 @@ def _log_action(action_type: str, target: str = "", details: str = ""):
     """写入审计日志。"""
     with db_session() as db:
         try:
-            name = st.session_state.get("user_name", "未知")
+            name = st.session_state.get(SESSION_KEY_USER_NAME, "未知")
             log = AuditLog(
                 operator_name=name,
                 action_type=action_type,
@@ -123,7 +155,7 @@ def _render_dashboard(db):
             .all()
         )
         if not recent:
-            st.caption("暂无记录。")
+            st.caption(EMPTY_NO_RECORDS)
         else:
             recent_df = pd.DataFrame(
                 [
@@ -141,32 +173,39 @@ def _render_dashboard(db):
     except Exception:
         st.caption("加载近期变动失败。")
 
-    # 近期操作统计：近 7 天按操作类型的次数
-    st.subheader("近期操作统计")
-    st.caption("近 7 天各类操作次数，便于了解使用情况。")
-    try:
-        since = datetime.now() - timedelta(days=7)
-        log_rows = (
-            db.query(AuditLog.action_type, func.count(AuditLog.id))
-            .filter(AuditLog.timestamp >= since)
-            .group_by(AuditLog.action_type)
-            .all()
-        )
-        if not log_rows:
-            st.caption("近 7 天暂无操作记录。")
-        else:
-            type_names = {"LOGIN": "登录", "QUERY_SINGLE": "单条查询", "QUERY_BATCH": "批量查询", "IMPORT": "批量导入", "ADD": "新增/编辑", "DELETE": "删除/初始化", "RESTORE": "恢复", "BACKUP": "备份/恢复"}
-            stat_df = pd.DataFrame(
-                [{"操作类型": type_names.get(aty, aty), "次数": cnt} for aty, cnt in log_rows]
-            )
-            st.dataframe(stat_df, use_container_width=True, hide_index=True)
-    except Exception:
-        st.caption("加载操作统计失败。")
-
 
 def _render_import_section(db):
-    """名单管理：批量导入 Excel 预览与导入。"""
+    """名单管理：批量导入 Excel 预览与导入；上次导入结果详情与跳过行导出。"""
     st.subheader("批量导入")
+
+    # 上次导入结果：详情与跳过行导出（若有）
+    if st.session_state.get("admin_last_import_result"):
+        res = st.session_state["admin_last_import_result"]
+        with st.expander("▶ 上次导入结果", expanded=True):
+            st.success(
+                f"新增 **{res['imported']}** 条，更新 **{res['updated']}** 条"
+                + (f"，跳过 **{res['skipped']}** 行（学号为空）。" if res["skipped"] else "。")
+            )
+            if res.get("skipped_rows"):
+                st.caption("以下为跳过的行（学号为空），可下载后修正再导入。")
+                skip_df = pd.DataFrame(res["skipped_rows"])
+                st.dataframe(skip_df.head(20), use_container_width=True, hide_index=True)
+                if len(res["skipped_rows"]) > 20:
+                    st.caption(f"仅展示前 20 行，共 {len(res['skipped_rows'])} 行。")
+                buf_skip = BytesIO()
+                pd.DataFrame(res["skipped_rows"]).to_excel(buf_skip, index=False, engine="openpyxl")
+                buf_skip.seek(0)
+                st.download_button(
+                    label="下载跳过行列表 (Excel)",
+                    data=buf_skip.getvalue(),
+                    file_name="导入跳过行.xlsx",
+                    mime=MIME_XLSX,
+                    key="admin_import_skip_download",
+                )
+            if st.button("关闭", key="admin_close_last_import"):
+                del st.session_state["admin_last_import_result"]
+                st.rerun()
+
     uploaded = st.file_uploader("上传 Excel (.xlsx / .xls)", type=["xlsx", "xls"], key="admin_import_file")
     # 上传新文件时解析并缓存，用于预览与导入
     if uploaded:
@@ -190,15 +229,20 @@ def _render_import_section(db):
             imported = 0
             updated = 0
             skipped = 0
+            skipped_rows = []
             last_imported = 0
             last_updated = 0
             batch_counter = 0
             try:
                 with st.spinner("正在导入..."):
-                    for _, row in df.iterrows():
+                    for idx, row in df.iterrows():
                         sid = str(row["学号"]).strip() if pd.notna(row["学号"]) else ""
                         if not sid:
                             skipped += 1
+                            skipped_rows.append({
+                                "行号": idx + 2,
+                                **{c: cell_str(row.get(c)) for c in REQUIRED_EXCEL_COLUMNS},
+                            })
                             continue
                         name = str(row["姓名"]).strip() if pd.notna(row["姓名"]) else ""
                         major = str(row["专业"]).strip() if pd.notna(row["专业"]) else None
@@ -246,10 +290,13 @@ def _render_import_section(db):
                     del st.session_state["admin_import_df"]
                 if "admin_import_filename" in st.session_state:
                     del st.session_state["admin_import_filename"]
-                msg = f"导入成功：新增 {imported} 条，更新 {updated} 条。"
-                if skipped:
-                    msg += f" 跳过学号为空的行 {skipped} 条。"
-                st.success(msg)
+                st.session_state["admin_last_import_result"] = {
+                    "imported": imported,
+                    "updated": updated,
+                    "skipped": skipped,
+                    "skipped_rows": skipped_rows,
+                }
+                st.success(SUCCESS_IMPORT_DONE)
                 st.balloons()
                 st.rerun()
             except Exception:
@@ -257,7 +304,6 @@ def _render_import_section(db):
                 st.error(
                     f"导入失败，已成功导入 {last_imported} 条，更新 {last_updated} 条；后续数据出错，请检查 Excel 格式（需包含：姓名、学号、专业、原因、处分时间）。"
                 )
-    return
 
 
 def _render_manual_add_section(db):
@@ -265,14 +311,14 @@ def _render_manual_add_section(db):
     st.divider()
     st.subheader("手动新增")
     with st.form("admin_add_form"):
-        add_name = st.text_input("姓名", key="add_name")
-        add_student_id = st.text_input("学号", key="add_student_id")
-        add_major = st.text_input("专业", key="add_major")
-        add_reason = st.text_area("原因", key="add_reason")
-        add_date = st.date_input("处分日期", key="add_date")
+        add_name = st.text_input(LABEL_NAME, key="add_name")
+        add_student_id = st.text_input(LABEL_STUDENT_ID, key="add_student_id")
+        add_major = st.text_input(LABEL_MAJOR, key="add_major")
+        add_reason = st.text_area(LABEL_REASON, key="add_reason")
+        add_date = st.date_input(LABEL_PUNISHMENT_DATE, key="add_date")
         if st.form_submit_button("添加"):
             if not add_name or not add_student_id:
-                st.error("请填写姓名和学号。")
+                st.error(f"请填写{LABEL_NAME}和{LABEL_STUDENT_ID}。")
             else:
                 ok_sid, err_sid = validate_student_id(add_student_id)
                 if not ok_sid:
@@ -282,7 +328,7 @@ def _render_manual_add_section(db):
                         with st.spinner("正在保存..."):
                             sid_clean = clean_student_id(add_student_id)
                             if db.query(Blacklist).filter(Blacklist.student_id == sid_clean).first():
-                                st.error("该学号已存在。")
+                                st.error(f"该{LABEL_STUDENT_ID}已存在。")
                             else:
                                 rec = Blacklist(
                                     name=add_name.strip(),
@@ -295,12 +341,11 @@ def _render_manual_add_section(db):
                                 db.add(rec)
                                 db.commit()
                                 _log_action(AUDIT_ADD, target=add_name, details=f"学号 {sid_clean[:8]}***")
-                                st.success("已添加。")
+                                st.success(SUCCESS_ADDED)
                                 st.rerun()
                     except Exception:
                         db.rollback()
-                        st.error("添加失败，请检查学号是否重复或联系管理员。")
-    return
+                        st.error("添加失败，" + MSG_TRY_AGAIN_OR_ADMIN)
 
 
 def _render_effective_list_section(db):
@@ -308,9 +353,9 @@ def _render_effective_list_section(db):
     st.subheader("生效名单")
     effective_list = db.query(Blacklist).filter(Blacklist.status == 1).order_by(Blacklist.id).all()
     if not effective_list:
-        st.caption("暂无生效记录。")
+        st.caption(EMPTY_NO_EFFECTIVE)
     else:
-        st.caption("可按姓名、学号、专业筛选（留空表示不限制）。")
+        st.caption(CAPTION_FILTER_BY_NAME_SID_MAJOR)
         ef1, ef2, ef3 = st.columns(3)
         with ef1:
             filter_effective_name = st.text_input("姓名筛选", key="admin_effective_filter_name", placeholder=PLACEHOLDER_FILTER_EMPTY)
@@ -336,15 +381,15 @@ def _render_effective_list_section(db):
             st.session_state["admin_effective_sort_select"] = "学号"
         if "admin_effective_order_select" not in st.session_state:
             st.session_state["admin_effective_order_select"] = SORT_ORDER_ASC
-        st.caption(LABEL_DISPLAY_AND_SORT + "：")
-        row_opt_eff, col_sort_eff, col_order_eff = st.columns([1, 1, 1])
-        with row_opt_eff:
-            idx_size = LIST_PAGE_SIZE_OPTIONS.index(page_size_eff) if page_size_eff in LIST_PAGE_SIZE_OPTIONS else 0
-            page_size_eff = st.selectbox(LABEL_PAGE_SIZE, LIST_PAGE_SIZE_OPTIONS, index=idx_size, key="admin_effective_page_size_select")
-        with col_sort_eff:
-            sort_key_eff = st.selectbox(LABEL_SORT_COLUMN, sort_cols_eff, key="admin_effective_sort_select")
-        with col_order_eff:
-            sort_order_eff = st.selectbox(LABEL_SORT_ORDER, SORT_ORDER_OPTIONS, key="admin_effective_order_select")
+        with st.expander(LABEL_DISPLAY_OPTIONS_EXPANDER, expanded=False):
+            row_opt_eff, col_sort_eff, col_order_eff = st.columns([1, 1, 1])
+            with row_opt_eff:
+                idx_size = LIST_PAGE_SIZE_OPTIONS.index(page_size_eff) if page_size_eff in LIST_PAGE_SIZE_OPTIONS else 0
+                page_size_eff = st.selectbox(LABEL_PAGE_SIZE, LIST_PAGE_SIZE_OPTIONS, index=idx_size, key="admin_effective_page_size_select")
+            with col_sort_eff:
+                sort_key_eff = st.selectbox(LABEL_SORT_COLUMN, sort_cols_eff, key="admin_effective_sort_select")
+            with col_order_eff:
+                sort_order_eff = st.selectbox(LABEL_SORT_ORDER, SORT_ORDER_OPTIONS, key="admin_effective_order_select")
         sort_asc_eff = sort_order_eff == SORT_ORDER_ASC
         if sort_key_eff not in sort_cols_eff:
             sort_key_eff = "学号"
@@ -426,7 +471,7 @@ def _render_effective_list_section(db):
 
         with st.expander("▶ 按学号删除、初始化名单、编辑", expanded=False):
             st.caption("按学号软删除、一键初始化生效名单、按学号进入编辑。")
-            del_sid_input = st.text_input("输入要删除的学号", key="del_student_id", placeholder="学号")
+            del_sid_input = st.text_input(f"输入要删除的{LABEL_STUDENT_ID}", key="del_student_id", placeholder=LABEL_STUDENT_ID)
             if st.button("软删除（设为已撤销）", key="admin_del_btn") and del_sid_input:
                 ok_del, err_del = validate_student_id(del_sid_input)
                 if not ok_del:
@@ -438,7 +483,7 @@ def _render_effective_list_section(db):
                             Blacklist.status == 1, Blacklist.student_id == sid_clean
                         ).first()
                         if not rec:
-                            st.error("未找到该学号的生效记录。")
+                            st.error(MSG_NOT_FOUND_EFFECTIVE)
                         else:
                             with st.spinner("正在更新..."):
                                 rec.status = 0
@@ -448,7 +493,7 @@ def _render_effective_list_section(db):
                             st.rerun()
                     except Exception:
                         db.rollback()
-                        st.error("删除操作失败，请稍后重试。")
+                        st.error("删除操作失败，" + MSG_TRY_AGAIN)
 
             st.divider()
             st.caption("将所有生效记录设为已撤销，清空生效名单。请谨慎操作。")
@@ -457,7 +502,7 @@ def _render_effective_list_section(db):
                     st.session_state["admin_show_init_confirm"] = True
                     st.rerun()
             else:
-                st.warning("确定要初始化名单吗？此操作将把所有生效记录设为已撤销（软删除），生效名单将为空。")
+                st.warning(MSG_CONFIRM_INIT_LIST)
                 col_confirm, col_cancel = st.columns(2)
                 with col_confirm:
                     if st.button("确认初始化", key="admin_init_confirm_btn"):
@@ -468,11 +513,11 @@ def _render_effective_list_section(db):
                                 _log_action(AUDIT_DELETE, target=LABEL_INIT_LIST, details=f"共 {n} 条生效记录设为已撤销")
                             if "admin_show_init_confirm" in st.session_state:
                                 del st.session_state["admin_show_init_confirm"]
-                            st.success("名单已初始化，生效名单已清空。")
+                            st.success(SUCCESS_INIT_LIST)
                             st.rerun()
                         except Exception:
                             db.rollback()
-                            st.error("初始化失败，请稍后重试。")
+                            st.error("初始化失败，" + MSG_TRY_AGAIN)
                 with col_cancel:
                     if st.button("取消", key="admin_init_cancel_btn"):
                         if "admin_show_init_confirm" in st.session_state:
@@ -480,7 +525,7 @@ def _render_effective_list_section(db):
                         st.rerun()
 
             st.divider()
-            edit_sid_input = st.text_input("输入要编辑的学号", key="edit_student_id", placeholder="学号")
+            edit_sid_input = st.text_input(f"输入要编辑的{LABEL_STUDENT_ID}", key="edit_student_id", placeholder=LABEL_STUDENT_ID)
             if st.button("编辑", key="admin_edit_btn") and edit_sid_input:
                 ok_edit, err_edit = validate_student_id(edit_sid_input)
                 if not ok_edit:
@@ -492,16 +537,15 @@ def _render_effective_list_section(db):
                             Blacklist.status == 1, Blacklist.student_id == sid_edit
                         ).first()
                         if not rec:
-                            st.error("未找到该学号的生效记录。")
+                            st.error(MSG_NOT_FOUND_EFFECTIVE)
                         elif rec.status == 0:
-                            st.warning("已撤销记录不可编辑，请先恢复或忽略。")
+                            st.warning("已撤销记录不可编辑，请先在「已撤销名单」中恢复。")
                         else:
                             st.session_state["admin_edit_id"] = rec.id
                             st.rerun()
                     except Exception:
                         db.rollback()
-                        st.error("查找记录失败，请检查学号后重试。")
-    return
+                        st.error("查找记录失败，" + MSG_TRY_AGAIN)
 
 
 def _render_edit_form_section():
@@ -515,39 +559,39 @@ def _render_edit_form_section():
             if "admin_edit_id" in st.session_state:
                 del st.session_state["admin_edit_id"]
             st.rerun()
-            return
-        with st.form("admin_edit_form"):
-            st.caption(f"正在编辑记录 ID：{edit_id}（学号不可修改）")
-            edit_name = st.text_input("姓名", value=rec.name, key="admin_edit_name")
-            st.text_input("学号（不可修改）", value=rec.student_id, disabled=True, key="admin_edit_sid_display")
-            edit_major = st.text_input("专业", value=rec.major or "", key="admin_edit_major")
-            edit_reason = st.text_area("原因", value=rec.reason or "", key="admin_edit_reason")
-            edit_date_val = rec.punishment_date
-            edit_date = st.date_input("处分日期", value=edit_date_val or datetime.now().date(), key="admin_edit_date")
-            col_save, col_cancel = st.columns(2)
-            with col_save:
-                submit_save = st.form_submit_button("保存修改")
-            with col_cancel:
-                submit_cancel = st.form_submit_button("取消")
-            if submit_save:
-                try:
-                    rec.name = (edit_name or "").strip() or rec.name
-                    rec.major = (edit_major or "").strip() or None
-                    rec.reason = (edit_reason or "").strip() or None
-                    rec.punishment_date = edit_date
-                    edit_db.commit()
-                    _log_action(AUDIT_ADD, target=f"编辑记录 {edit_id}", details=f"{rec.name} {rec.student_id[:8]}***")
+        else:
+            with st.form("admin_edit_form"):
+                st.caption(f"正在编辑记录 ID：{edit_id}（{LABEL_STUDENT_ID}不可修改）")
+                edit_name = st.text_input(LABEL_NAME, value=rec.name, key="admin_edit_name")
+                st.text_input(f"{LABEL_STUDENT_ID}（不可修改）", value=rec.student_id, disabled=True, key="admin_edit_sid_display")
+                edit_major = st.text_input(LABEL_MAJOR, value=rec.major or "", key="admin_edit_major")
+                edit_reason = st.text_area(LABEL_REASON, value=rec.reason or "", key="admin_edit_reason")
+                edit_date_val = rec.punishment_date
+                edit_date = st.date_input(LABEL_PUNISHMENT_DATE, value=edit_date_val or datetime.now().date(), key="admin_edit_date")
+                col_save, col_cancel = st.columns(2)
+                with col_save:
+                    submit_save = st.form_submit_button("保存修改")
+                with col_cancel:
+                    submit_cancel = st.form_submit_button("取消")
+                if submit_save:
+                    try:
+                        rec.name = (edit_name or "").strip() or rec.name
+                        rec.major = (edit_major or "").strip() or None
+                        rec.reason = (edit_reason or "").strip() or None
+                        rec.punishment_date = edit_date
+                        edit_db.commit()
+                        _log_action(AUDIT_ADD, target=f"编辑记录 {edit_id}", details=f"{rec.name} {rec.student_id[:8]}***")
+                        if "admin_edit_id" in st.session_state:
+                            del st.session_state["admin_edit_id"]
+                        st.success(SUCCESS_SAVED)
+                        st.rerun()
+                    except Exception:
+                        edit_db.rollback()
+                        st.error("保存失败，" + MSG_TRY_AGAIN)
+                if submit_cancel:
                     if "admin_edit_id" in st.session_state:
                         del st.session_state["admin_edit_id"]
-                    st.success("已保存修改。")
                     st.rerun()
-                except Exception:
-                    edit_db.rollback()
-                    st.error("保存失败，请检查输入后重试。")
-            if submit_cancel:
-                if "admin_edit_id" in st.session_state:
-                    del st.session_state["admin_edit_id"]
-                st.rerun()
 
 
 def _render_revoked_section(db):
@@ -555,9 +599,9 @@ def _render_revoked_section(db):
     st.subheader("已撤销名单")
     revoked_list = db.query(Blacklist).filter(Blacklist.status == 0).order_by(Blacklist.id).all()
     if not revoked_list:
-        st.caption("暂无已撤销记录。")
+        st.caption(EMPTY_NO_REVOKED)
     else:
-        st.caption("可按姓名、学号、专业筛选（留空表示不限制）。")
+        st.caption(CAPTION_FILTER_BY_NAME_SID_MAJOR)
         rv1, rv2, rv3 = st.columns(3)
         with rv1:
             filter_revoked_name = st.text_input("姓名筛选", key="admin_revoked_filter_name", placeholder=PLACEHOLDER_FILTER_EMPTY)
@@ -582,15 +626,15 @@ def _render_revoked_section(db):
             st.session_state["admin_revoked_sort_select"] = "学号"
         if "admin_revoked_order_select" not in st.session_state:
             st.session_state["admin_revoked_order_select"] = SORT_ORDER_ASC
-        st.caption(LABEL_DISPLAY_AND_SORT + "：")
-        row_opt_rev, col_sort_rev, col_order_rev = st.columns([1, 1, 1])
-        with row_opt_rev:
-            idx_size_rev = LIST_PAGE_SIZE_OPTIONS.index(page_size_rev) if page_size_rev in LIST_PAGE_SIZE_OPTIONS else 0
-            page_size_rev = st.selectbox(LABEL_PAGE_SIZE, LIST_PAGE_SIZE_OPTIONS, index=idx_size_rev, key="admin_revoked_page_size_select")
-        with col_sort_rev:
-            sort_key_rev = st.selectbox(LABEL_SORT_COLUMN, sort_cols_rev, key="admin_revoked_sort_select")
-        with col_order_rev:
-            sort_order_rev = st.selectbox(LABEL_SORT_ORDER, SORT_ORDER_OPTIONS, key="admin_revoked_order_select")
+        with st.expander(LABEL_DISPLAY_OPTIONS_EXPANDER, expanded=False):
+            row_opt_rev, col_sort_rev, col_order_rev = st.columns([1, 1, 1])
+            with row_opt_rev:
+                idx_size_rev = LIST_PAGE_SIZE_OPTIONS.index(page_size_rev) if page_size_rev in LIST_PAGE_SIZE_OPTIONS else 0
+                page_size_rev = st.selectbox(LABEL_PAGE_SIZE, LIST_PAGE_SIZE_OPTIONS, index=idx_size_rev, key="admin_revoked_page_size_select")
+            with col_sort_rev:
+                sort_key_rev = st.selectbox(LABEL_SORT_COLUMN, sort_cols_rev, key="admin_revoked_sort_select")
+            with col_order_rev:
+                sort_order_rev = st.selectbox(LABEL_SORT_ORDER, SORT_ORDER_OPTIONS, key="admin_revoked_order_select")
         sort_asc_rev = sort_order_rev == SORT_ORDER_ASC
         if sort_key_rev not in sort_cols_rev:
             sort_key_rev = "学号"
@@ -672,7 +716,7 @@ def _render_revoked_section(db):
 
         with st.expander("▶ 按学号恢复为生效", expanded=False):
             st.caption("输入学号可将该条已撤销记录恢复为生效。")
-            restore_sid_input = st.text_input("输入要恢复的学号", key="restore_student_id", placeholder="学号")
+            restore_sid_input = st.text_input(f"输入要恢复的{LABEL_STUDENT_ID}", key="restore_student_id", placeholder=LABEL_STUDENT_ID)
             if st.button("恢复为生效", key="admin_restore_btn") and restore_sid_input:
                 ok_restore, err_restore = validate_student_id(restore_sid_input)
                 if not ok_restore:
@@ -684,7 +728,7 @@ def _render_revoked_section(db):
                             Blacklist.status == 0, Blacklist.student_id == sid_restore
                         ).first()
                         if not rec:
-                            st.error("未找到该学号的已撤销记录。")
+                            st.error(MSG_NOT_FOUND_REVOKED)
                         else:
                             with st.spinner("正在恢复..."):
                                 rec.status = 1
@@ -698,75 +742,13 @@ def _render_revoked_section(db):
                             st.rerun()
                     except Exception:
                         db.rollback()
-                        st.error("恢复失败，请稍后重试。")
-    return
-
-
-def _render_batch_check_section(db):
-    """名单管理：批量查询（上传 Excel 与生效名单比对）。"""
-    st.subheader("批量查询")
-    st.caption("上传包含「学号」列的 Excel，与生效名单比对；可下载比对结果报告（含完整学号）。")
-    admin_batch_file = st.file_uploader("选择 Excel 文件", type=["xlsx", "xls"], key="admin_batch_check_file")
-    if st.button("开始比对", key="admin_batch_check_btn") and admin_batch_file:
-        try:
-            with st.spinner("正在解析并比对..."):
-                df_batch = parse_batch_check_excel(admin_batch_file)
-        except ValueError as e:
-            st.error(str(e))
-        else:
-            if df_batch.empty:
-                st.warning("Excel 中未找到有效的学号。")
-            else:
-                student_ids_batch = df_batch["学号"].dropna().astype(str).unique().tolist()
-                matched_batch = (
-                    db.query(Blacklist)
-                    .filter(Blacklist.status == 1, Blacklist.student_id.in_(student_ids_batch))
-                    .all()
-                )
-                _log_action(
-                    AUDIT_QUERY_BATCH,
-                    target=admin_batch_file.name,
-                    details=f"共 {len(student_ids_batch)} 条，命中 {len(matched_batch)} 条",
-                )
-                if not matched_batch:
-                    st.success("✅ 未查询到违规记录，名单内学生信用良好。")
-                else:
-                    st.error(f"⚠️ 共命中 {len(matched_batch)} 条失信/违规记录。")
-                    st.dataframe(
-                        pd.DataFrame([
-                            {"姓名": r.name, "学号": r.student_id, "专业": r.major or "", "原因": (r.reason or "")[:50], "处分日期": str(r.punishment_date) if r.punishment_date else ""}
-                            for r in matched_batch
-                        ]),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-                    report_rows_admin = []
-                    for r in matched_batch:
-                        report_rows_admin.append({
-                            "姓名": r.name,
-                            "学号": r.student_id,
-                            "专业": r.major or "",
-                            "原因": r.reason or "",
-                            "处分日期": str(r.punishment_date) if r.punishment_date else "",
-                            "是否命中": "是",
-                        })
-                    report_df_admin = pd.DataFrame(report_rows_admin)
-                    buf_admin = BytesIO()
-                    report_df_admin.to_excel(buf_admin, index=False, engine="openpyxl")
-                    buf_admin.seek(0)
-                    st.download_button(
-                        label="下载比对结果报告 (Excel)",
-                        data=buf_admin.getvalue(),
-                        file_name="比对结果报告_管理员.xlsx",
-                        mime=MIME_XLSX,
-                        key="admin_batch_download",
-                    )
+                        st.error("恢复失败，" + MSG_TRY_AGAIN)
 
 
 def _render_management(db):
-    """名单管理：按「录入 → 生效名单 → 已撤销 → 批量查询」分 Tab，缩短单页、符合操作逻辑。"""
-    st.caption("录入名单后，在生效/已撤销名单中查看与维护，需要时使用批量查询。")
-    tab_rec, tab_eff, tab_rev, tab_query = st.tabs(["录入", "生效名单", "已撤销名单", "批量查询"])
+    """名单管理：按「录入 → 生效名单 → 已撤销」分 Tab；批量比对与教师端一致，由教师端完成。"""
+    st.caption("录入名单后，在生效/已撤销名单中查看与维护；批量比对请使用教师端。")
+    tab_rec, tab_eff, tab_rev = st.tabs(["录入", "生效名单", "已撤销名单"])
     with tab_rec:
         _render_import_section(db)
         _render_manual_add_section(db)
@@ -775,8 +757,6 @@ def _render_management(db):
         _render_edit_form_section()
     with tab_rev:
         _render_revoked_section(db)
-    with tab_query:
-        _render_batch_check_section(db)
 
 
 def _render_system(db):
@@ -792,6 +772,8 @@ def _render_system(db):
     except Exception:
         operator_names = []
 
+    audit_type_display_options = ["全部"] + [AUDIT_TYPE_NAMES.get(t, t) for t in AUDIT_ACTION_TYPES]
+    audit_name_to_code = {v: k for k, v in AUDIT_TYPE_NAMES.items()}
     col1, col2, col3 = st.columns(3)
     with col1:
         filter_operator = st.selectbox(
@@ -800,11 +782,12 @@ def _render_system(db):
             key="audit_filter_operator",
         )
     with col2:
-        filter_type = st.selectbox(
+        filter_type_display = st.selectbox(
             "操作类型",
-            ["全部"] + AUDIT_ACTION_TYPES,
+            audit_type_display_options,
             key="audit_filter_type",
         )
+        filter_type = None if filter_type_display == "全部" or filter_type_display not in audit_name_to_code else audit_name_to_code[filter_type_display]
     with col3:
         use_date_filter = st.checkbox("按日期筛选", key="audit_use_date")
         filter_date = None
@@ -816,12 +799,20 @@ def _render_system(db):
             q = db.query(AuditLog).order_by(AuditLog.timestamp.desc())
             if filter_operator != "全部":
                 q = q.filter(AuditLog.operator_name == filter_operator)
-            if filter_type != "全部":
+            if filter_type:
                 q = q.filter(AuditLog.action_type == filter_type)
             if use_date_filter and filter_date is not None:
                 q = q.filter(func.date(AuditLog.timestamp) == str(filter_date))
             logs = q.limit(500).all()
-
+            # 导出使用同一筛选条件但不做条数限制，导出当前筛选结果全部
+            q_export = db.query(AuditLog).order_by(AuditLog.timestamp.desc())
+            if filter_operator != "全部":
+                q_export = q_export.filter(AuditLog.operator_name == filter_operator)
+            if filter_type:
+                q_export = q_export.filter(AuditLog.action_type == filter_type)
+            if use_date_filter and filter_date is not None:
+                q_export = q_export.filter(func.date(AuditLog.timestamp) == str(filter_date))
+            logs_export = q_export.all()
         if not logs:
             st.caption("暂无符合条件的审计日志。")
         else:
@@ -830,7 +821,7 @@ def _render_system(db):
                     {
                         "ID": r.id,
                         "操作人": r.operator_name,
-                        "类型": r.action_type,
+                        "类型": AUDIT_TYPE_NAMES.get(r.action_type, r.action_type),
                         "对象": r.target or "",
                         "详情": (r.details or "")[:100],
                         "时间": str(r.timestamp),
@@ -839,85 +830,88 @@ def _render_system(db):
                 ]
             )
             st.dataframe(log_df, use_container_width=True, hide_index=True)
-            st.caption(f"共 {len(logs)} 条（最多展示 500 条）。")
+            st.caption(
+                f"表格展示 {len(logs)} 条（最多 500 条）；导出为当前筛选结果全部，共 {len(logs_export)} 条。"
+            )
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            col_csv, col_xlsx, _ = st.columns([1, 1, 2])
-            with col_csv:
-                csv_buf = BytesIO()
-                log_df.to_csv(csv_buf, index=False, encoding="utf-8-sig")
-                csv_buf.seek(0)
-                st.download_button(
-                    label="导出 CSV",
-                    data=csv_buf.getvalue(),
-                    file_name=f"审计日志_{stamp}.csv",
-                    mime="text/csv",
-                    key="audit_export_csv",
-                )
-            with col_xlsx:
-                xlsx_buf = BytesIO()
-                log_df.to_excel(xlsx_buf, index=False, engine="openpyxl")
-                xlsx_buf.seek(0)
-                st.download_button(
-                    label="导出 Excel",
-                    data=xlsx_buf.getvalue(),
-                    file_name=f"审计日志_{stamp}.xlsx",
-                    mime=MIME_XLSX,
-                    key="audit_export_xlsx",
-                )
+            log_df_export = pd.DataFrame(
+                [
+                    {
+                        "ID": r.id,
+                        "操作人": r.operator_name,
+                        "类型": AUDIT_TYPE_NAMES.get(r.action_type, r.action_type),
+                        "对象": r.target or "",
+                        "详情": r.details or "",
+                        "时间": str(r.timestamp),
+                    }
+                    for r in logs_export
+                ]
+            )
+            xlsx_buf = BytesIO()
+            log_df_export.to_excel(xlsx_buf, index=False, engine="openpyxl")
+            xlsx_buf.seek(0)
+            st.download_button(
+                label="导出审计日志 (Excel)",
+                data=xlsx_buf.getvalue(),
+                file_name=f"审计日志_{stamp}.xlsx",
+                mime=MIME_XLSX,
+                key="audit_export_xlsx",
+            )
     except Exception:
-        st.error("加载审计日志失败，请稍后重试。")
+        st.error("加载审计日志失败，" + MSG_TRY_AGAIN)
 
-    st.divider()
-    st.subheader("数据库备份下载")
-    try:
-        db_bytes = get_db_file_bytes()
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        st.download_button(
-            label="下载当前数据库 (.db)",
-            data=db_bytes,
-            file_name=f"database_{stamp}.db",
-            mime="application/octet-stream",
-            key="admin_download_db",
-        )
-    except FileNotFoundError as e:
-        st.error(str(e))
-    except OSError as e:
-        st.error("读取数据库文件失败，请检查备份目录或联系管理员。")
+    with st.expander("▶ 数据库备份与恢复", expanded=False):
+        st.caption("下载当前数据库或上传备份文件覆盖恢复；恢复为危险操作，请谨慎。")
+        st.subheader("数据库备份下载")
+        try:
+            db_bytes = get_db_file_bytes()
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            st.download_button(
+                label="下载当前数据库 (.db)",
+                data=db_bytes,
+                file_name=f"database_{stamp}.db",
+                mime="application/octet-stream",
+                key="admin_download_db",
+            )
+        except FileNotFoundError as e:
+            st.error(str(e))
+        except OSError as e:
+            st.error(MSG_DB_READ_FAIL)
 
-    st.divider()
-    st.subheader("⚡️ 危险操作：数据恢复 (Restore)")
-    restore_uploaded = st.file_uploader(
-        "上传备份文件以覆盖当前数据库",
-        type=["db"],
-        key="admin_restore_upload",
-    )
-    if restore_uploaded:
-        st.warning("此操作将**覆盖**当前数据库，所有未备份的修改将丢失。")
-        restore_confirm_checked = st.checkbox(
-            "我已知晓将覆盖当前数据，确认执行恢复",
-            key="admin_restore_confirm_check",
+        st.divider()
+        st.subheader("⚡️ 危险操作：数据恢复")
+        restore_uploaded = st.file_uploader(
+            "上传备份文件以覆盖当前数据库",
+            type=["db"],
+            key="admin_restore_upload",
         )
-        if restore_confirm_checked:
-            if st.button("🔴 确认恢复 (Confirm Restore)", key="admin_confirm_restore"):
-                try:
-                    backup_bytes = restore_uploaded.read()
-                    if not backup_bytes:
-                        st.error("上传文件为空，无法恢复。")
-                    else:
-                        with open(DATABASE_PATH, "wb") as f:
-                            f.write(backup_bytes)
-                        st.cache_resource.clear()
-                        _log_action(AUDIT_BACKUP, target="数据恢复", details=f"从文件 {restore_uploaded.name} 恢复")
-                        st.success("数据库已恢复，即将刷新页面。")
-                        st.balloons()
-                        time.sleep(2)
-                        st.rerun()
-                except OSError:
-                    st.error("恢复失败，请确认上传的是有效的 .db 备份文件。")
-                except Exception:
-                    st.error("恢复过程出错，请稍后重试或联系管理员。")
-        else:
-            st.caption("请先勾选上方确认框后再执行恢复。")
+        if restore_uploaded:
+            st.warning("此操作将**覆盖**当前数据库，所有未备份的修改将丢失。")
+            restore_confirm_checked = st.checkbox(
+                "我已知晓将覆盖当前数据，确认执行恢复",
+                key="admin_restore_confirm_check",
+            )
+            if restore_confirm_checked:
+                if st.button("🔴 确认恢复", key="admin_confirm_restore"):
+                    try:
+                        backup_bytes = restore_uploaded.read()
+                        if not backup_bytes:
+                            st.error(MSG_UPLOAD_EMPTY)
+                        else:
+                            with open(DATABASE_PATH, "wb") as f:
+                                f.write(backup_bytes)
+                            st.cache_resource.clear()
+                            _log_action(AUDIT_BACKUP, target="数据恢复", details=f"从文件 {restore_uploaded.name} 恢复")
+                            st.success(SUCCESS_DB_RESTORED)
+                            st.balloons()
+                            time.sleep(2)
+                            st.rerun()
+                    except OSError:
+                        st.error(MSG_DB_RESTORE_FAIL)
+                    except Exception:
+                        st.error("恢复过程出错，" + MSG_TRY_AGAIN_OR_ADMIN)
+            else:
+                st.caption(CAPTION_CONFIRM_RESTORE_DB)
 
 
 def _render_user_management(db):
@@ -927,7 +921,7 @@ def _render_user_management(db):
     st.subheader("用户列表")
     st.caption("工号唯一；禁用后该账号无法登录。")
     if not users:
-        st.caption("暂无用户。")
+        st.caption(EMPTY_NO_USER)
     else:
         user_df = pd.DataFrame(
             [
@@ -979,17 +973,17 @@ def _render_user_management(db):
                             db.add(u)
                             db.commit()
                             _log_action(AUDIT_ADD, target=f"用户 {uname}", details=f"角色 {new_role}")
-                            st.success("用户已添加。")
+                            st.success("用户已添加。")  # 与 SUCCESS_ADDED 区分（用户 vs 名单记录）
                             st.rerun()
                 except Exception:
                     db.rollback()
-                    st.error("添加失败，请检查输入后重试。")
+                    st.error("添加失败，" + MSG_TRY_AGAIN)
 
     st.divider()
     st.subheader("密码重置与启用/禁用")
     st.caption("选择用户后执行重置密码或切换账号状态；不能禁用当前登录账号。")
     if not users:
-        st.caption("暂无用户。")
+        st.caption(EMPTY_NO_USER)
     else:
         reset_options = [f"{u.username}（{u.full_name}）" for u in users]
         toggle_options = [f"{u.username}（{u.full_name}）— {'正常' if u.is_active else '已禁用'}" for u in users]
@@ -1017,11 +1011,11 @@ def _render_user_management(db):
                                 ).decode("utf-8")
                                 db.commit()
                                 _log_action(AUDIT_ADD, target=f"密码重置 {user.username}", details="")
-                                st.success("密码已重置。")
+                                st.success(SUCCESS_PWD_RESET)
                                 st.rerun()
                     except Exception:
                         db.rollback()
-                        st.error("重置失败，请稍后重试。")
+                        st.error("重置失败，" + MSG_TRY_AGAIN)
 
         with rcol2:
             st.caption("启用/禁用账号")
@@ -1033,7 +1027,7 @@ def _render_user_management(db):
                         st.error("未找到该用户。")
                     else:
                         target_user = users[idx]
-                        if target_user.username == st.session_state.get("username"):
+                        if target_user.username == st.session_state.get(SESSION_KEY_USERNAME):
                             st.warning("不能禁用当前登录账号。")
                         else:
                             with st.spinner("正在更新..."):
@@ -1045,7 +1039,7 @@ def _render_user_management(db):
                                 st.rerun()
                 except Exception:
                     db.rollback()
-                    st.error("操作失败，请稍后重试。")
+                    st.error("操作失败，" + MSG_TRY_AGAIN)
 
 
 # 管理员侧边栏导航选项（与下方 NAV_* 索引对应）
@@ -1070,7 +1064,7 @@ def render_admin_sidebar_nav():
     if ADMIN_NAV_KEY not in st.session_state:
         st.session_state[ADMIN_NAV_KEY] = ADMIN_NAV_OPTIONS[NAV_DASHBOARD]
     st.markdown("### 管理员")
-    st.caption("选择功能板块")
+    st.caption(LABEL_SELECT_PANEL)
     st.radio(
         "功能",
         options=ADMIN_NAV_OPTIONS,

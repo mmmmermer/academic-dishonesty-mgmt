@@ -8,7 +8,28 @@ import time
 
 import streamlit as st
 
-from config import SESSION_TIMEOUT_MINUTES
+from config import (
+    LABEL_CURRENT_USER,
+    LABEL_LOGOUT,
+    LABEL_ROLE,
+    LABEL_SELECT_PANEL,
+    MSG_SESSION_TIMEOUT,
+    MSG_SESSION_TIMEOUT_SOON,
+    MSG_SYSTEM_ERROR,
+    MSG_UNKNOWN_ROLE,
+    ROLE_ADMIN,
+    ROLE_TEACHER,
+    SESSION_KEY_AUTO_BACKUP_DONE,
+    SESSION_KEY_LAST_ACTIVITY,
+    SESSION_KEY_LOGGED_IN,
+    SESSION_KEY_USER_ID,
+    SESSION_KEY_USER_NAME,
+    SESSION_KEY_USER_ROLE,
+    SESSION_KEY_USERNAME,
+    SESSION_KEY_LOGIN_FAIL_RECORDS,
+    SESSION_TIMEOUT_MINUTES,
+    SESSION_TIMEOUT_WARN_MINUTES,
+)
 
 # 日志：写入 logs/app.log，便于排查问题
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
@@ -36,59 +57,65 @@ def _setup_logging():
 _setup_logging()
 logger = logging.getLogger(__name__)
 
-# 教师/管理员页面若尚未实现，则使用占位
+# 教师/管理员页面与侧栏导航（顶层导入，避免在 sidebar 内重复 import）
 try:
-    from views.teacher_page import render_teacher_page
+    from views.teacher_page import render_teacher_page, render_teacher_sidebar_nav
 except ImportError:
 
     def render_teacher_page():
         st.info("教师页面开发中，敬请期待。")
 
+    def render_teacher_sidebar_nav():
+        """占位：教师模块未安装时侧栏不渲染导航。"""
+        pass
+
 try:
-    from views.admin_page import render_admin_page
+    from views.admin_page import render_admin_page, render_admin_sidebar_nav
 except ImportError:
 
     def render_admin_page():
         st.info("管理员页面开发中，敬请期待。")
 
+    def render_admin_sidebar_nav():
+        """占位：管理员模块未安装时侧栏不渲染导航。"""
+        pass
 
 from views.login import render_login_page
 
 
 def _run_auto_backup_once():
     """会话内仅执行一次：将 database.db 备份到 backups/，失败不阻塞启动。"""
-    if st.session_state.get("auto_backup_done"):
+    if st.session_state.get(SESSION_KEY_AUTO_BACKUP_DONE):
         return
     try:
         from utils import auto_backup
         auto_backup()
-        st.session_state["auto_backup_done"] = True
+        st.session_state[SESSION_KEY_AUTO_BACKUP_DONE] = True
     except Exception:
         pass
 
 
 def _init_session_state():
-    if "logged_in" not in st.session_state:
-        st.session_state.logged_in = False
-    if "user_role" not in st.session_state:
-        st.session_state.user_role = ""
-    if "user_name" not in st.session_state:
-        st.session_state.user_name = ""
-    if "user_id" not in st.session_state:
-        st.session_state.user_id = 0
-    if "username" not in st.session_state:
-        st.session_state.username = ""
-    if "last_activity_at" not in st.session_state:
-        st.session_state.last_activity_at = 0.0
-    if "login_fail_records" not in st.session_state:
-        st.session_state.login_fail_records = {}
+    """初始化会话键，避免 KeyError；键名使用 config 常量便于维护。"""
+    defaults = [
+        (SESSION_KEY_LOGGED_IN, False),
+        (SESSION_KEY_USER_ROLE, ""),
+        (SESSION_KEY_USER_NAME, ""),
+        (SESSION_KEY_USER_ID, 0),
+        (SESSION_KEY_USERNAME, ""),
+        (SESSION_KEY_LAST_ACTIVITY, 0.0),
+        (SESSION_KEY_LOGIN_FAIL_RECORDS, {}),
+    ]
+    for key, val in defaults:
+        if key not in st.session_state:
+            st.session_state[key] = val
 
 
 def _inject_watermark():
     """仅登录后显示水印（姓名+工号），全局固定、不阻挡操作；退出登录后不注入。"""
-    if not st.session_state.logged_in:
+    if not st.session_state.get(SESSION_KEY_LOGGED_IN):
         return
-    raw_text = f"{st.session_state.user_name} {st.session_state.username}"
+    raw_text = f"{st.session_state.get(SESSION_KEY_USER_NAME, '')} {st.session_state.get(SESSION_KEY_USERNAME, '')}"
     text = html.escape(raw_text)
     # 固定全屏、高层级、半透明、不响应点击，确保登录后全局可见且不消失；内容转义防 XSS
     css = f"""
@@ -114,64 +141,83 @@ def _inject_watermark():
     st.markdown(css, unsafe_allow_html=True)
 
 
+def _render_sidebar():
+    """侧边栏：身份标题 + 功能导航（管理员/教师）+ 当前用户信息 + 登出。"""
+    with st.sidebar:
+        if st.session_state.get(SESSION_KEY_LOGGED_IN):
+            role = st.session_state.get(SESSION_KEY_USER_ROLE, "")
+            if role == "admin":
+                render_admin_sidebar_nav()
+            elif role == "teacher":
+                render_teacher_sidebar_nav()
+            if role in ("admin", "teacher"):
+                st.divider()
+            role_label = ROLE_ADMIN if role == "admin" else ROLE_TEACHER
+            st.caption(f"**{LABEL_CURRENT_USER}**：{st.session_state.get(SESSION_KEY_USER_NAME, '')}（{st.session_state.get(SESSION_KEY_USERNAME, '')}）")
+            st.caption(f"**{LABEL_ROLE}**：{role_label}")
+            st.divider()
+            if st.button(LABEL_LOGOUT, key="logout_btn"):
+                st.session_state[SESSION_KEY_LOGGED_IN] = False
+                st.session_state[SESSION_KEY_USER_ROLE] = ""
+                st.session_state[SESSION_KEY_USER_NAME] = ""
+                st.session_state[SESSION_KEY_USER_ID] = 0
+                st.session_state[SESSION_KEY_USERNAME] = ""
+                st.rerun()
+        st.divider()
+
+
+def _check_session_timeout() -> bool:
+    """
+    检查会话是否超时；若未超时则更新最后活动时间，必要时提示即将超时。
+    :return: True 表示已超时并已清空会话（调用方应 rerun），False 表示未超时。
+    """
+    now = time.time()
+    prev = st.session_state.get(SESSION_KEY_LAST_ACTIVITY, 0.0)
+    timeout_seconds = SESSION_TIMEOUT_MINUTES * 60
+    warn_seconds = SESSION_TIMEOUT_WARN_MINUTES * 60
+    if prev > 0 and (now - prev) > timeout_seconds:
+        st.session_state[SESSION_KEY_LOGGED_IN] = False
+        st.session_state[SESSION_KEY_USER_ROLE] = ""
+        st.session_state[SESSION_KEY_USER_NAME] = ""
+        st.session_state[SESSION_KEY_USER_ID] = 0
+        st.session_state[SESSION_KEY_USERNAME] = ""
+        st.session_state[SESSION_KEY_LAST_ACTIVITY] = 0.0
+        st.warning(MSG_SESSION_TIMEOUT)
+        return True
+    remaining = timeout_seconds - (now - prev) if prev > 0 else timeout_seconds
+    if 0 < remaining <= warn_seconds:
+        warn_mins = max(1, int(remaining / 60))
+        st.warning(MSG_SESSION_TIMEOUT_SOON.format(mins=warn_mins))
+    st.session_state[SESSION_KEY_LAST_ACTIVITY] = now
+    return False
+
+
 def main():
     st.set_page_config(page_title="学术失信人员管理系统", layout="wide")
     try:
         _init_session_state()
-        # 启动时自动备份（每会话一次，失败不阻塞）
         _run_auto_backup_once()
-        # 水印：仅登录后注入，退出后消失
         _inject_watermark()
+        _render_sidebar()
 
-        # 侧边栏：管理员为「身份标题 + 四板块导航」+ 当前用户信息 + 登出（先渲染导航，保证 session 中 nav 已就绪）
-        with st.sidebar:
-            if st.session_state.logged_in:
-                if st.session_state.user_role == "admin":
-                    from views.admin_page import render_admin_sidebar_nav
-                    render_admin_sidebar_nav()  # 唯一数据源 admin_nav_radio，主区据此渲染
-                    st.divider()
-                role_label = "管理员" if st.session_state.user_role == "admin" else "教师"
-                st.caption(f"**当前用户**：{st.session_state.user_name}（{st.session_state.username}）")
-                st.caption(f"**角色**：{role_label}")
-                st.divider()
-                if st.button("退出登录", key="logout_btn"):
-                    st.session_state.logged_in = False
-                    st.session_state.user_role = ""
-                    st.session_state.user_name = ""
-                    st.session_state.user_id = 0
-                    st.session_state.username = ""
-                    st.rerun()
-            st.divider()
-
-        if not st.session_state.logged_in:
+        if not st.session_state.get(SESSION_KEY_LOGGED_IN):
             render_login_page()
             return
 
-        # 会话超时：先检查距上次活动是否超时，再更新最后活动时间
-        now = time.time()
-        prev_activity = st.session_state.last_activity_at
-        timeout_seconds = SESSION_TIMEOUT_MINUTES * 60
-        if prev_activity > 0 and (now - prev_activity) > timeout_seconds:
-            st.session_state.logged_in = False
-            st.session_state.user_role = ""
-            st.session_state.user_name = ""
-            st.session_state.user_id = 0
-            st.session_state.username = ""
-            st.session_state.last_activity_at = 0.0
-            st.warning("登录已超时，请重新登录。")
+        if _check_session_timeout():
             st.rerun()
-        st.session_state.last_activity_at = now
 
-        if st.session_state.user_role == "teacher":
+        role = st.session_state.get(SESSION_KEY_USER_ROLE, "")
+        if role == "teacher":
             render_teacher_page()
-        elif st.session_state.user_role == "admin":
+        elif role == "admin":
             render_admin_page()
         else:
-            st.warning("未知角色，请联系管理员。")
+            st.warning(MSG_UNKNOWN_ROLE)
 
     except Exception as e:
         logger.exception("应用未捕获异常")
-        st.error("系统遇到异常，请稍后重试或联系管理员。")
+        st.error(MSG_SYSTEM_ERROR)
         with st.expander("技术详情（供管理员排查）", expanded=False):
             st.code(str(e), language="text")
             st.caption("完整堆栈已写入 logs/app.log。")

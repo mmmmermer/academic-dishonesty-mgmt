@@ -29,6 +29,15 @@ REQUIRED_EXCEL_COLUMNS = ["姓名", "学号", "专业", "原因", "处分时间"
 FULL_TO_HALF_DIGITS = str.maketrans("０１２３４５６７８９", "0123456789")
 
 
+def cell_str(val: Any) -> str:
+    """
+    Excel 单元格转字符串，空值/NaN 返回空串。供导入、批量比对等统一使用。
+    """
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return ""
+    return str(val).strip()
+
+
 def clean_student_id(text: Any) -> str:
     """
     清洗学号：去除所有空白、全角数字转半角。

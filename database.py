@@ -25,7 +25,10 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 @contextmanager
 def db_session():
-    """数据库会话上下文管理器，确保使用完毕后自动 close，异常时 rollback 由调用方处理。"""
+    """
+    数据库会话上下文管理器，确保使用完毕后自动 close。
+    异常时未提交的变更会在 close 时由 Session 自动回滚，调用方可在 except 中显式 rollback 以保持可读性。
+    """
     db = SessionLocal()
     try:
         yield db
