@@ -7,7 +7,7 @@ from typing import Union
 import bcrypt
 
 try:
-    from config import PASSWORD_MAX_BYTES
+    from .config import PASSWORD_MAX_BYTES
 except ImportError:
     PASSWORD_MAX_BYTES = 72
 

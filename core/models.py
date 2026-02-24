@@ -4,7 +4,7 @@
 """
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, Date, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, Column, Date, DateTime, Index, Integer, String, Text
 from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
@@ -27,6 +27,10 @@ class Blacklist(Base):
     """失信名单主表 (blacklist)"""
 
     __tablename__ = "blacklist"
+    __table_args__ = (
+        Index("ix_blacklist_status_id_card", "status", "id_card"),  # 库内分页/筛选：status + 学号
+        Index("ix_blacklist_status_name", "status", "name"),  # 库内分页/筛选：status + 姓名
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(64), nullable=False, index=True, comment="姓名")
@@ -43,6 +47,7 @@ class AuditLog(Base):
     """审计日志表 (audit_logs)，只增不减"""
 
     __tablename__ = "audit_logs"
+    __table_args__ = (Index("ix_audit_log_timestamp", "timestamp"),)  # 列表/导出按时间倒序
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     operator_name = Column(String(64), nullable=False, comment="操作人姓名(冗余存储)")

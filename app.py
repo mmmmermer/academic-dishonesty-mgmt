@@ -8,11 +8,13 @@ import time
 
 import streamlit as st
 
-from config import (
+from core.config import (
     LABEL_CURRENT_USER,
     LABEL_LOGOUT,
     LABEL_ROLE,
     LABEL_SELECT_PANEL,
+    LOG_FILENAME,
+    LOG_SUBDIR,
     MSG_SESSION_TIMEOUT,
     MSG_SESSION_TIMEOUT_SOON,
     MSG_SYSTEM_ERROR,
@@ -31,8 +33,8 @@ from config import (
     SESSION_TIMEOUT_WARN_MINUTES,
 )
 
-# 日志：写入 logs/app.log，便于排查问题
-LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+# 日志：路径由 config 统一配置（阶段四）
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), LOG_SUBDIR)
 
 
 def _setup_logging():
@@ -41,7 +43,7 @@ def _setup_logging():
         os.makedirs(LOG_DIR, exist_ok=True)
     except OSError:
         pass
-    log_file = os.path.join(LOG_DIR, "app.log")
+    log_file = os.path.join(LOG_DIR, LOG_FILENAME)
     fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     try:
         handler = logging.FileHandler(log_file, encoding="utf-8")
@@ -56,6 +58,16 @@ def _setup_logging():
 
 _setup_logging()
 logger = logging.getLogger(__name__)
+
+# 多实例部署时禁止使用 SQLite（阶段三）：仅当显式设置 MULTI_INSTANCE=1 或 true 时检查并打日志
+_multi_instance = os.environ.get("MULTI_INSTANCE", "").strip().lower()
+if _multi_instance in ("1", "true"):
+    try:
+        from core.database import IS_SQLITE
+        if IS_SQLITE:
+            logger.warning("MULTI_INSTANCE=1 但当前使用 SQLite；多实例部署必须使用 MySQL/PostgreSQL，请设置 DATABASE_URL。")
+    except Exception:
+        pass
 
 # 教师/管理员页面与侧栏导航（顶层导入，避免在 sidebar 内重复 import）
 try:
@@ -81,7 +93,7 @@ except ImportError:
         pass
 
 from views.login import render_login_page
-from session_store import delete_session, get_session
+from core.session_store import delete_session, get_session
 
 
 def _restore_session_from_sid():
@@ -111,7 +123,7 @@ def _run_auto_backup_once():
     if st.session_state.get(SESSION_KEY_AUTO_BACKUP_DONE):
         return
     try:
-        from utils import auto_backup
+        from core.utils import auto_backup
         auto_backup()
         st.session_state[SESSION_KEY_AUTO_BACKUP_DONE] = True
     except Exception:
@@ -176,7 +188,9 @@ def _render_sidebar():
             if role in ("admin", "teacher"):
                 st.divider()
             role_label = ROLE_ADMIN if role == "admin" else ROLE_TEACHER
-            st.caption(f"**{LABEL_CURRENT_USER}**：{st.session_state.get(SESSION_KEY_USER_NAME, '')}（{st.session_state.get(SESSION_KEY_USERNAME, '')}）")
+            st.caption(
+                f"**{LABEL_CURRENT_USER}**：{st.session_state.get(SESSION_KEY_USER_NAME, '')}（{st.session_state.get(SESSION_KEY_USERNAME, '')}）"
+            )
             st.caption(f"**{LABEL_ROLE}**：{role_label}")
             st.divider()
             if st.button(LABEL_LOGOUT, key="logout_btn"):

@@ -43,13 +43,16 @@ python -m pytest tests/ -v
 
 ## 项目结构（简要）
 
-- `app.py` — 主入口、会话、水印、导航
-- `config.py` — 常量与环境变量配置
-- `database.py` — SQLite 连接与 `db_session` 上下文
-- `models.py` — 用户、名单、审计日志表定义
-- `auth.py` — 密码校验
-- `utils.py` — 学号清洗、Excel 解析、备份、登录失败持久化
+- `app.py` — 主入口、会话、水印、导航（表现层 + 应用控制层）
+- `core/` — 核心业务与数据访问层
+  - `config.py` — 常量与环境变量配置、业务文案
+  - `database.py` — SQLite 连接与 `db_session` 上下文
+  - `models.py` — 用户、名单、审计日志表定义
+  - `auth.py` — 密码校验
+  - `utils.py` — 学号清洗、Excel 解析、备份等工具
+  - `session_store.py` — 基于 JSON 的服务端会话存储
 - `views/` — 登录、教师端、管理员端页面
 - `project_requirements.md` — 详细需求与约束说明
+- `docs/` — 架构、可扩展性、优化建议、上线部署等文档
 
-数据库文件与备份位于项目目录下（`database.db`、`backups/`、`login_fail.json`），部署时注意权限与定期备份。
+数据库文件与备份位于项目目录下（`database.db`、`backups/`），部署时注意权限与定期备份。

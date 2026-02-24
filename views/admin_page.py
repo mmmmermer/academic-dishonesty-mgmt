@@ -2,17 +2,20 @@
 管理员页面：仪表盘、名单管理、系统维护、用户管理。
 由 app 根据侧边栏导航（admin_nav_radio）渲染对应板块；名单支持分页、排序、每页条数、学号校验。
 """
+import logging
 import time
 from datetime import datetime
 from io import BytesIO
 
 import bcrypt
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 import plotly.express as px
 import streamlit as st
 from sqlalchemy import func
 
-from config import (
+from core.config import (
     AUDIT_ACTION_TYPES,
     AUDIT_ADD,
     AUDIT_BACKUP,
@@ -55,6 +58,7 @@ from config import (
     SESSION_KEY_USER_NAME,
     SESSION_KEY_USERNAME,
     SORT_ORDER_ASC,
+    SORT_ORDER_DESC,
     SORT_ORDER_OPTIONS,
     SUCCESS_ADDED,
     SUCCESS_DB_RESTORED,
@@ -64,9 +68,9 @@ from config import (
     SUCCESS_SAVED,
     USERNAME_MAX_LEN,
 )
-from database import db_session
-from models import AuditLog, Blacklist, User
-from utils import (
+from core.database import db_session, IS_SQLITE
+from core.models import AuditLog, Blacklist, User
+from core.utils import (
     DATABASE_PATH,
     REQUIRED_EXCEL_COLUMNS,
     cell_str,
@@ -94,11 +98,72 @@ def _log_action(action_type: str, target: str = "", details: str = ""):
             db.rollback()
 
 
-def _render_dashboard_metrics(db):
-    """仪表盘：名单总数、生效中、已撤销三指标。"""
-    total = db.query(Blacklist).count()
-    effective = db.query(Blacklist).filter(Blacklist.status == 1).count()
-    revoked = db.query(Blacklist).filter(Blacklist.status == 0).count()
+# 仪表盘短时缓存 ttl（秒），减轻 DB 压力（阶段四）
+DASHBOARD_CACHE_TTL = 60
+
+
+@st.cache_data(ttl=DASHBOARD_CACHE_TTL)
+def get_dashboard_counts():
+    """仪表盘三指标：(total, effective, revoked)。"""
+    with db_session() as db:
+        total = db.query(Blacklist).count()
+        effective = db.query(Blacklist).filter(Blacklist.status == 1).count()
+        revoked = db.query(Blacklist).filter(Blacklist.status == 0).count()
+    return total, effective, revoked
+
+
+@st.cache_data(ttl=DASHBOARD_CACHE_TTL)
+def get_dashboard_major_counts():
+    """专业分布：返回 [(专业名, 人数), ...]。"""
+    with db_session() as db:
+        rows = db.query(Blacklist.major).filter(Blacklist.status == 1).all()
+    if not rows:
+        return []
+    major_series = pd.Series([r[0] or "未填写" for r in rows])
+    counts = major_series.value_counts().reset_index()
+    return [(str(m), int(c)) for m, c in zip(counts.iloc[:, 0].tolist(), counts.iloc[:, 1].tolist())]
+
+
+@st.cache_data(ttl=DASHBOARD_CACHE_TTL)
+def get_dashboard_year_counts():
+    """按处分年份分布：返回 [(年份, 人数), ...] 已按年份排序。"""
+    with db_session() as db:
+        date_rows = db.query(Blacklist.punishment_date).filter(Blacklist.status == 1).all()
+    if not date_rows or all(r[0] is None for r in date_rows):
+        return []
+    years = [r[0].year for r in date_rows if r[0]]
+    if not years:
+        return []
+    year_series = pd.Series(years)
+    year_counts = year_series.value_counts().sort_index().reset_index()
+    return [(int(y), int(c)) for y, c in zip(year_counts.iloc[:, 0].tolist(), year_counts.iloc[:, 1].tolist())]
+
+
+@st.cache_data(ttl=DASHBOARD_CACHE_TTL)
+def get_recent_blacklist_rows():
+    """近期名单变动：返回最多 10 条，每条为 dict（姓名、学号、专业、状态、创建/更新）。"""
+    with db_session() as db:
+        recent = (
+            db.query(Blacklist)
+            .order_by(Blacklist.created_at.desc())
+            .limit(10)
+            .all()
+        )
+    return [
+        {
+            "姓名": r.name,
+            "学号": r.student_id,
+            "专业": (r.major or "")[:20],
+            "状态": "生效" if r.status == 1 else "已撤销",
+            "创建/更新": str(r.created_at)[:19] if r.created_at else "",
+        }
+        for r in recent
+    ]
+
+
+def _render_dashboard_metrics():
+    """仪表盘：名单总数、生效中、已撤销三指标（使用短时缓存）。"""
+    total, effective, revoked = get_dashboard_counts()
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("名单总数", total)
@@ -108,74 +173,49 @@ def _render_dashboard_metrics(db):
         st.metric("已撤销", revoked)
 
 
-def _render_dashboard_charts(db):
-    """仪表盘：专业分布饼图与按处分年份分布柱状图。"""
+def _render_dashboard_charts():
+    """仪表盘：专业分布饼图与按处分年份分布柱状图（使用短时缓存）。"""
     chart_col1, chart_col2 = st.columns(2)
     with chart_col1:
         st.subheader("专业分布")
-        rows = db.query(Blacklist.major).filter(Blacklist.status == 1).all()
-        if not rows:
+        major_counts = get_dashboard_major_counts()
+        if not major_counts:
             st.caption("暂无生效记录，无法生成专业分布图。")
         else:
-            major_series = pd.Series([r[0] or "未填写" for r in rows])
-            counts = major_series.value_counts().reset_index()
-            counts.columns = ["专业", "人数"]
-            fig = px.pie(counts, values="人数", names="专业", title="专业分布")
+            counts_df = pd.DataFrame(major_counts, columns=["专业", "人数"])
+            fig = px.pie(counts_df, values="人数", names="专业", title="专业分布")
             st.plotly_chart(fig, use_container_width=True)
     with chart_col2:
         st.subheader("按处分年份分布")
-        date_rows = db.query(Blacklist.punishment_date).filter(Blacklist.status == 1).all()
-        if not date_rows or all(r[0] is None for r in date_rows):
+        year_counts = get_dashboard_year_counts()
+        if not year_counts:
             st.caption("暂无处分日期数据，无法生成年份分布图。")
         else:
-            years = [r[0].year for r in date_rows if r[0]]
-            if not years:
-                st.caption("暂无有效处分日期。")
-            else:
-                year_series = pd.Series(years)
-                year_counts = year_series.value_counts().sort_index().reset_index()
-                year_counts.columns = ["年份", "人数"]
-                fig_bar = px.bar(year_counts, x="年份", y="人数", title="按处分年份分布")
-                st.plotly_chart(fig_bar, use_container_width=True)
+            year_df = pd.DataFrame(year_counts, columns=["年份", "人数"])
+            fig_bar = px.bar(year_df, x="年份", y="人数", title="按处分年份分布")
+            st.plotly_chart(fig_bar, use_container_width=True)
 
 
-def _render_dashboard_recent(db):
-    """仪表盘：近期名单变动表格（最近 10 条）。"""
+def _render_dashboard_recent():
+    """仪表盘：近期名单变动表格（最近 10 条，使用短时缓存）。"""
     st.subheader("近期名单变动")
     st.caption("最近录入或更新的名单记录，便于核对与追溯。")
     try:
-        recent = (
-            db.query(Blacklist)
-            .order_by(Blacklist.created_at.desc())
-            .limit(10)
-            .all()
-        )
-        if not recent:
+        rows = get_recent_blacklist_rows()
+        if not rows:
             st.caption(EMPTY_NO_RECORDS)
         else:
-            recent_df = pd.DataFrame(
-                [
-                    {
-                        "姓名": r.name,
-                        "学号": r.student_id,
-                        "专业": (r.major or "")[:20],
-                        "状态": "生效" if r.status == 1 else "已撤销",
-                        "创建/更新": str(r.created_at)[:19] if r.created_at else "",
-                    }
-                    for r in recent
-                ]
-            )
-            st.dataframe(recent_df, use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
     except Exception:
         st.caption("加载近期变动失败。")
 
 
-def _render_dashboard(db):
+def _render_dashboard():
     """仪表盘：名单概览、分布图并排、近期变动。"""
     st.caption("名单总数与生效/撤销概况、专业与年份分布、近期名单变动及操作统计，便于快速把握现状。")
-    _render_dashboard_metrics(db)
-    _render_dashboard_charts(db)
-    _render_dashboard_recent(db)
+    _render_dashboard_metrics()
+    _render_dashboard_charts()
+    _render_dashboard_recent()
 
 
 def _render_import_last_result():
@@ -302,6 +342,7 @@ def _handle_import_confirm(db):
         if key in st.session_state:
             del st.session_state[key]
     st.session_state["admin_last_import_result"] = result
+    logger.info("批量导入完成 imported=%s updated=%s skipped=%s", result["imported"], result["updated"], result.get("skipped", 0))
     st.success(SUCCESS_IMPORT_DONE)
     st.balloons()
     st.rerun()
@@ -366,29 +407,30 @@ def _try_manual_add(db, add_name, add_student_id, add_major, add_reason, add_dat
         return False
 
 
-def _sort_key_by_attr(key_attr):
-    """返回用于名单行排序的 key 函数（按属性 key_attr）。"""
-    def key_fn(r):
-        try:
-            v = getattr(r, key_attr, None)
-            if v is None:
-                return ""
-            if key_attr == "punishment_date":
-                return v.isoformat() if hasattr(v, "isoformat") else str(v)
-            return (v or "").__str__()
-        except Exception:
-            return ""
-    return key_fn
+def _like_escape(s: str) -> str:
+    """对 LIKE 模式中的 % _ 进行转义，避免用户输入导致匹配过宽。"""
+    if not s:
+        return s
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def _filter_effective_list(effective_list, fn, fs, fm):
-    """按姓名/学号/专业筛选生效名单。"""
-    return [
-        r for r in effective_list
-        if (not fn or (fn in (r.name or "")))
-        and (not fs or (fs in (r.student_id or "")))
-        and (not fm or (fm in (r.major or "")))
-    ]
+def _effective_base_query(db, fn, fs, fm):
+    """生效名单库内筛选：status=1，可选姓名/学号/专业 LIKE（已转义 %/_）。"""
+    q = db.query(Blacklist).filter(Blacklist.status == 1)
+    if fn:
+        q = q.filter(Blacklist.name.like(f"%{_like_escape(fn)}%", escape="\\"))
+    if fs:
+        q = q.filter(Blacklist.student_id.like(f"%{_like_escape(fs)}%", escape="\\"))
+    if fm:
+        q = q.filter(Blacklist.major.like(f"%{_like_escape(fm)}%", escape="\\"))
+    return q
+
+
+def _effective_order(q, sort_key_eff, sort_asc_eff):
+    """对生效名单查询施加排序。"""
+    attr_map = {"姓名": "name", "学号": "student_id", "专业": "major", "处分日期": "punishment_date"}
+    col = getattr(Blacklist, attr_map.get(sort_key_eff, "student_id"))
+    return q.order_by(col.asc() if sort_asc_eff else col.desc())
 
 
 def _render_effective_filters_ui():
@@ -428,25 +470,10 @@ def _render_effective_display_options():
     return page_size_eff, sort_key_eff, sort_asc_eff
 
 
-def _sorted_effective_list(filtered_effective, sort_key_eff, sort_asc_eff):
-    """对筛选后的生效名单按列排序，返回新列表。"""
-    attr_map = {"姓名": "name", "学号": "student_id", "专业": "major", "处分日期": "punishment_date"}
-    key_attr = attr_map.get(sort_key_eff, "student_id")
-    try:
-        return sorted(filtered_effective, key=_sort_key_by_attr(key_attr), reverse=not sort_asc_eff)
-    except Exception:
-        return filtered_effective
-
-
-def _render_effective_table_and_pagination(sorted_effective, page_size_eff):
-    """渲染生效名单表格与分页控件。"""
-    total_eff = len(sorted_effective)
+def _render_effective_table_and_pagination(page_effective, total_eff, page_size_eff, page_eff):
+    """渲染生效名单表格与分页控件（库内分页：仅传入当前页与总数）。"""
     total_pages_eff = max(1, (total_eff + page_size_eff - 1) // page_size_eff)
-    page_eff = st.session_state.get("admin_effective_page", 0)
-    page_eff = max(0, min(page_eff, total_pages_eff - 1))
-    st.session_state["admin_effective_page"] = page_eff
     start_eff = page_eff * page_size_eff
-    page_effective = sorted_effective[start_eff : start_eff + page_size_eff]
     df_display = pd.DataFrame(
         [
             {
@@ -480,14 +507,39 @@ def _render_effective_table_and_pagination(sorted_effective, page_size_eff):
             st.rerun()
 
 
-def _render_effective_export_btn(filtered_effective):
-    """渲染生效名单导出 Excel 按钮。"""
-    if not filtered_effective:
+# 导出分批大小与最大条数（避免大结果集 OOM）
+EXPORT_BATCH_SIZE = 2000
+EXPORT_MAX_ROWS = 50000
+SPINNER_EXPORT = "准备导出中…"
+
+
+def _fetch_effective_export_rows(db, fn, fs, fm, sort_key_eff, sort_asc_eff):
+    """按当前筛选与排序分批拉取生效名单，最多 EXPORT_MAX_ROWS 条。"""
+    base = _effective_base_query(db, fn, fs, fm)
+    ordered = _effective_order(base, sort_key_eff, sort_asc_eff)
+    rows = []
+    for offset in range(0, EXPORT_MAX_ROWS, EXPORT_BATCH_SIZE):
+        batch = ordered.offset(offset).limit(EXPORT_BATCH_SIZE).all()
+        if not batch:
+            break
+        rows.extend(batch)
+    return rows
+
+
+def _render_effective_export_btn(db, fn, fs, fm, sort_key_eff, sort_asc_eff, total_eff):
+    """渲染生效名单导出 Excel 按钮（按当前筛选与排序分批查询，最多 50000 条）。"""
+    if total_eff == 0:
         return
+    with st.spinner(SPINNER_EXPORT):
+        export_rows = _fetch_effective_export_rows(db, fn, fs, fm, sort_key_eff, sort_asc_eff)
+    if not export_rows:
+        return
+    if len(export_rows) >= EXPORT_MAX_ROWS:
+        st.caption(f"筛选结果超过 {EXPORT_MAX_ROWS} 条，仅导出前 {EXPORT_MAX_ROWS} 条。")
     export_eff_df = pd.DataFrame(
         [
             {"序号": i, "姓名": r.name, "学号": r.student_id, "专业": r.major or "", "原因": r.reason or "", "处分日期": str(r.punishment_date) if r.punishment_date else ""}
-            for i, r in enumerate(filtered_effective, 1)
+            for i, r in enumerate(export_rows, 1)
         ]
     )
     buf_eff = BytesIO()
@@ -521,6 +573,7 @@ def _render_effective_delete_block(db):
             rec.status = 0
             db.commit()
             _log_action(AUDIT_DELETE, target=sid_clean[:16], details=f"软删除：{rec.name} {sid_clean[:8]}***")
+        logger.info("名单软删除学号=%s", sid_clean[:16])
         st.success("已软删除。")
         st.rerun()
     except Exception:
@@ -545,6 +598,7 @@ def _render_effective_init_block(db):
                     n = db.query(Blacklist).filter(Blacklist.status == 1).update({Blacklist.status: 0})
                     db.commit()
                     _log_action(AUDIT_DELETE, target=LABEL_INIT_LIST, details=f"共 {n} 条生效记录设为已撤销")
+                logger.info("名单初始化 生效转撤销条数=%s", n)
                 if "admin_show_init_confirm" in st.session_state:
                     del st.session_state["admin_show_init_confirm"]
                 st.success(SUCCESS_INIT_LIST)
@@ -609,26 +663,27 @@ def _render_manual_add_section(db):
             st.rerun()
 
 
-def _render_effective_list_content(db, effective_list):
-    """生效名单有数据时：筛选、排序、分页、表格、导出、删除/初始化/编辑 expander。"""
+def _render_effective_list_section(db):
+    """名单管理：生效名单、库内筛选/排序/分页、导出（分批最多 50000 条）；删除/初始化/编辑收在 expander 内。"""
+    st.subheader("生效名单")
     st.caption(CAPTION_FILTER_BY_NAME_SID_MAJOR)
     fn, fs, fm = _render_effective_filters_ui()
-    filtered_effective = _filter_effective_list(effective_list, fn, fs, fm)
     page_size_eff, sort_key_eff, sort_asc_eff = _render_effective_display_options()
-    sorted_effective = _sorted_effective_list(filtered_effective, sort_key_eff, sort_asc_eff)
-    _render_effective_table_and_pagination(sorted_effective, page_size_eff)
-    _render_effective_export_btn(sorted_effective)
-    _render_effective_actions_expander(db)
-
-
-def _render_effective_list_section(db):
-    """名单管理：生效名单、筛选、分页、导出；删除/初始化/编辑收在 expander 内。"""
-    st.subheader("生效名单")
-    effective_list = db.query(Blacklist).filter(Blacklist.status == 1).order_by(Blacklist.id).all()
-    if not effective_list:
+    base = _effective_base_query(db, fn, fs, fm)
+    total_eff = base.count()
+    if total_eff == 0:
         st.caption(EMPTY_NO_EFFECTIVE)
-    else:
-        _render_effective_list_content(db, effective_list)
+        _render_effective_actions_expander(db)
+        return
+    ordered = _effective_order(base, sort_key_eff, sort_asc_eff)
+    total_pages_eff = max(1, (total_eff + page_size_eff - 1) // page_size_eff)
+    page_eff = st.session_state.get("admin_effective_page", 0)
+    page_eff = max(0, min(page_eff, total_pages_eff - 1))
+    st.session_state["admin_effective_page"] = page_eff
+    page_effective = ordered.offset(page_eff * page_size_eff).limit(page_size_eff).all()
+    _render_effective_table_and_pagination(page_effective, total_eff, page_size_eff, page_eff)
+    _render_effective_export_btn(db, fn, fs, fm, sort_key_eff, sort_asc_eff, total_eff)
+    _render_effective_actions_expander(db)
 
 
 def _clear_edit_id():
@@ -686,14 +741,23 @@ def _render_edit_form_section():
                 st.rerun()
 
 
-def _filter_revoked_list(revoked_list, rn, rs, rm):
-    """按姓名/学号/专业筛选已撤销名单。"""
-    return [
-        r for r in revoked_list
-        if (not rn or (rn in (r.name or "")))
-        and (not rs or (rs in (r.student_id or "")))
-        and (not rm or (rm in (r.major or "")))
-    ]
+def _revoked_base_query(db, rn, rs, rm):
+    """已撤销名单库内筛选：status=0，可选姓名/学号/专业 LIKE（已转义 %/_）。"""
+    q = db.query(Blacklist).filter(Blacklist.status == 0)
+    if rn:
+        q = q.filter(Blacklist.name.like(f"%{_like_escape(rn)}%", escape="\\"))
+    if rs:
+        q = q.filter(Blacklist.student_id.like(f"%{_like_escape(rs)}%", escape="\\"))
+    if rm:
+        q = q.filter(Blacklist.major.like(f"%{_like_escape(rm)}%", escape="\\"))
+    return q
+
+
+def _revoked_order(q, sort_key_rev, sort_asc_rev):
+    """对已撤销名单查询施加排序。"""
+    attr_map = {"姓名": "name", "学号": "student_id", "专业": "major", "处分日期": "punishment_date"}
+    col = getattr(Blacklist, attr_map.get(sort_key_rev, "student_id"))
+    return q.order_by(col.asc() if sort_asc_rev else col.desc())
 
 
 def _render_revoked_filters_ui():
@@ -733,15 +797,10 @@ def _render_revoked_display_options():
     return page_size_rev, sort_key_rev, sort_asc_rev
 
 
-def _render_revoked_table_and_pagination(sorted_revoked, page_size_rev):
-    """渲染已撤销名单表格与分页控件。"""
-    total_rev = len(sorted_revoked)
+def _render_revoked_table_and_pagination(page_revoked, total_rev, page_size_rev, page_rev):
+    """渲染已撤销名单表格与分页控件（库内分页：仅传入当前页与总数）。"""
     total_pages_rev = max(1, (total_rev + page_size_rev - 1) // page_size_rev)
-    page_rev = st.session_state.get("admin_revoked_page", 0)
-    page_rev = max(0, min(page_rev, total_pages_rev - 1))
-    st.session_state["admin_revoked_page"] = page_rev
     start_rev = page_rev * page_size_rev
-    page_revoked = sorted_revoked[start_rev : start_rev + page_size_rev]
     df_revoked = pd.DataFrame(
         [
             {
@@ -775,14 +834,33 @@ def _render_revoked_table_and_pagination(sorted_revoked, page_size_rev):
             st.rerun()
 
 
-def _render_revoked_export_btn(sorted_revoked):
-    """渲染已撤销名单导出 Excel 按钮。"""
-    if not sorted_revoked:
+def _fetch_revoked_export_rows(db, rn, rs, rm, sort_key_rev, sort_asc_rev):
+    """按当前筛选与排序分批拉取已撤销名单，最多 EXPORT_MAX_ROWS 条。"""
+    base = _revoked_base_query(db, rn, rs, rm)
+    ordered = _revoked_order(base, sort_key_rev, sort_asc_rev)
+    rows = []
+    for offset in range(0, EXPORT_MAX_ROWS, EXPORT_BATCH_SIZE):
+        batch = ordered.offset(offset).limit(EXPORT_BATCH_SIZE).all()
+        if not batch:
+            break
+        rows.extend(batch)
+    return rows
+
+
+def _render_revoked_export_btn(db, rn, rs, rm, sort_key_rev, sort_asc_rev, total_rev):
+    """渲染已撤销名单导出 Excel 按钮（按当前筛选与排序分批查询，最多 50000 条）。"""
+    if total_rev == 0:
         return
+    with st.spinner(SPINNER_EXPORT):
+        export_rows = _fetch_revoked_export_rows(db, rn, rs, rm, sort_key_rev, sort_asc_rev)
+    if not export_rows:
+        return
+    if len(export_rows) >= EXPORT_MAX_ROWS:
+        st.caption(f"筛选结果超过 {EXPORT_MAX_ROWS} 条，仅导出前 {EXPORT_MAX_ROWS} 条。")
     export_rev_df = pd.DataFrame(
         [
             {"序号": i, "姓名": r.name, "学号": r.student_id, "专业": r.major or "", "原因": r.reason or "", "处分日期": str(r.punishment_date) if r.punishment_date else ""}
-            for i, r in enumerate(sorted_revoked, 1)
+            for i, r in enumerate(export_rows, 1)
         ]
     )
     buf_rev = BytesIO()
@@ -823,6 +901,7 @@ def _render_revoked_restore_expander(db):
                                 target=sid_restore[:16],
                                 details=f"恢复：{rec.name} {sid_restore[:8]}***",
                             )
+                        logger.info("名单恢复为生效 学号=%s", sid_restore[:16])
                         st.success("已恢复为生效。")
                         st.rerun()
                 except Exception:
@@ -831,20 +910,26 @@ def _render_revoked_restore_expander(db):
 
 
 def _render_revoked_section(db):
-    """名单管理：已撤销名单、筛选、分页、导出、按学号恢复。"""
+    """名单管理：已撤销名单、库内筛选/排序/分页、导出（分批最多 50000 条）、按学号恢复。"""
     st.subheader("已撤销名单")
-    revoked_list = db.query(Blacklist).filter(Blacklist.status == 0).order_by(Blacklist.id).all()
-    if not revoked_list:
+    st.caption(CAPTION_FILTER_BY_NAME_SID_MAJOR)
+    rn, rs, rm = _render_revoked_filters_ui()
+    page_size_rev, sort_key_rev, sort_asc_rev = _render_revoked_display_options()
+    base = _revoked_base_query(db, rn, rs, rm)
+    total_rev = base.count()
+    if total_rev == 0:
         st.caption(EMPTY_NO_REVOKED)
-    else:
-        st.caption(CAPTION_FILTER_BY_NAME_SID_MAJOR)
-        rn, rs, rm = _render_revoked_filters_ui()
-        filtered_revoked = _filter_revoked_list(revoked_list, rn, rs, rm)
-        page_size_rev, sort_key_rev, sort_asc_rev = _render_revoked_display_options()
-        sorted_revoked = _sorted_effective_list(filtered_revoked, sort_key_rev, sort_asc_rev)
-        _render_revoked_table_and_pagination(sorted_revoked, page_size_rev)
-        _render_revoked_export_btn(sorted_revoked)
         _render_revoked_restore_expander(db)
+        return
+    ordered = _revoked_order(base, sort_key_rev, sort_asc_rev)
+    total_pages_rev = max(1, (total_rev + page_size_rev - 1) // page_size_rev)
+    page_rev = st.session_state.get("admin_revoked_page", 0)
+    page_rev = max(0, min(page_rev, total_pages_rev - 1))
+    st.session_state["admin_revoked_page"] = page_rev
+    page_revoked = ordered.offset(page_rev * page_size_rev).limit(page_size_rev).all()
+    _render_revoked_table_and_pagination(page_revoked, total_rev, page_size_rev, page_rev)
+    _render_revoked_export_btn(db, rn, rs, rm, sort_key_rev, sort_asc_rev, total_rev)
+    _render_revoked_restore_expander(db)
 
 
 def _render_management(db):
@@ -869,32 +954,43 @@ def _get_audit_operator_names(db):
         return []
 
 
+def _audit_log_export_query(db, filter_operator, filter_type, use_date_filter, filter_date):
+    """按筛选条件构建审计日志导出用查询（与列表同条件）。"""
+    q = db.query(AuditLog).order_by(AuditLog.timestamp.desc())
+    if filter_operator != "全部":
+        q = q.filter(AuditLog.operator_name == filter_operator)
+    if filter_type:
+        q = q.filter(AuditLog.action_type == filter_type)
+    if use_date_filter and filter_date is not None:
+        q = q.filter(func.date(AuditLog.timestamp) == str(filter_date))
+    return q
+
+
 def _fetch_audit_logs(db, filter_operator, filter_type, use_date_filter, filter_date):
-    """按筛选条件查询审计日志，返回 (展示用 500 条, 导出用全量)。异常时返回 (None, None)。"""
+    """按筛选条件查询审计日志，返回 (展示用 500 条, 当前筛选总条数)。异常时返回 (None, 0)。"""
     try:
-        q = db.query(AuditLog).order_by(AuditLog.timestamp.desc())
-        if filter_operator != "全部":
-            q = q.filter(AuditLog.operator_name == filter_operator)
-        if filter_type:
-            q = q.filter(AuditLog.action_type == filter_type)
-        if use_date_filter and filter_date is not None:
-            q = q.filter(func.date(AuditLog.timestamp) == str(filter_date))
-        logs = q.limit(500).all()
-        q_export = db.query(AuditLog).order_by(AuditLog.timestamp.desc())
-        if filter_operator != "全部":
-            q_export = q_export.filter(AuditLog.operator_name == filter_operator)
-        if filter_type:
-            q_export = q_export.filter(AuditLog.action_type == filter_type)
-        if use_date_filter and filter_date is not None:
-            q_export = q_export.filter(func.date(AuditLog.timestamp) == str(filter_date))
-        logs_export = q_export.all()
-        return logs, logs_export
+        base = _audit_log_export_query(db, filter_operator, filter_type, use_date_filter, filter_date)
+        total_export = base.count()
+        logs = _audit_log_export_query(db, filter_operator, filter_type, use_date_filter, filter_date).limit(500).all()
+        return logs, total_export
     except Exception:
-        return None, None
+        return None, 0
 
 
-def _render_audit_log_display(logs, logs_export):
-    """渲染审计日志表格与导出按钮。"""
+def _fetch_audit_logs_export_batched(db, filter_operator, filter_type, use_date_filter, filter_date):
+    """按当前筛选条件分批拉取审计日志用于导出，最多 EXPORT_MAX_ROWS 条。"""
+    q = _audit_log_export_query(db, filter_operator, filter_type, use_date_filter, filter_date)
+    rows = []
+    for offset in range(0, EXPORT_MAX_ROWS, EXPORT_BATCH_SIZE):
+        batch = q.offset(offset).limit(EXPORT_BATCH_SIZE).all()
+        if not batch:
+            break
+        rows.extend(batch)
+    return rows
+
+
+def _render_audit_log_display(logs, total_export, db, filter_operator, filter_type, use_date_filter, filter_date):
+    """渲染审计日志表格与导出按钮（导出为分批查询，最多 50000 条）。"""
     if not logs:
         st.caption("暂无符合条件的审计日志。")
         return
@@ -902,7 +998,13 @@ def _render_audit_log_display(logs, logs_export):
         [{"ID": r.id, "操作人": r.operator_name, "类型": AUDIT_TYPE_NAMES.get(r.action_type, r.action_type), "对象": r.target or "", "详情": (r.details or "")[:100], "时间": str(r.timestamp)} for r in logs]
     )
     st.dataframe(log_df, use_container_width=True, hide_index=True)
-    st.caption(f"表格展示 {len(logs)} 条（最多 500 条）；导出为当前筛选结果全部，共 {len(logs_export)} 条。")
+    st.caption(f"表格展示 {len(logs)} 条（最多 500 条）；导出为当前筛选结果，共 {total_export} 条（最多导出 {EXPORT_MAX_ROWS} 条）。")
+    with st.spinner(SPINNER_EXPORT):
+        logs_export = _fetch_audit_logs_export_batched(db, filter_operator, filter_type, use_date_filter, filter_date)
+    if not logs_export:
+        return
+    if len(logs_export) >= EXPORT_MAX_ROWS:
+        st.caption(f"筛选结果超过 {EXPORT_MAX_ROWS} 条，仅导出前 {EXPORT_MAX_ROWS} 条。")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_df_export = pd.DataFrame(
         [{"ID": r.id, "操作人": r.operator_name, "类型": AUDIT_TYPE_NAMES.get(r.action_type, r.action_type), "对象": r.target or "", "详情": r.details or "", "时间": str(r.timestamp)} for r in logs_export]
@@ -931,11 +1033,11 @@ def _render_audit_log_section(db):
         filter_date = st.date_input("选择日期", key="audit_filter_date") if use_date_filter else None
     try:
         with st.spinner("加载日志..."):
-            logs, logs_export = _fetch_audit_logs(db, filter_operator, filter_type, use_date_filter, filter_date)
+            logs, total_export = _fetch_audit_logs(db, filter_operator, filter_type, use_date_filter, filter_date)
         if logs is None:
             st.error("加载审计日志失败，" + MSG_TRY_AGAIN)
         else:
-            _render_audit_log_display(logs, logs_export)
+            _render_audit_log_display(logs, total_export, db, filter_operator, filter_type, use_date_filter, filter_date)
     except Exception:
         st.error("加载审计日志失败，" + MSG_TRY_AGAIN)
 
@@ -947,6 +1049,8 @@ def _render_db_backup_section():
         db_bytes = get_db_file_bytes()
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         st.download_button(label="下载当前数据库 (.db)", data=db_bytes, file_name=f"database_{stamp}.db", mime="application/octet-stream", key="admin_download_db")
+    except NotImplementedError as e:
+        st.info("当前使用 MySQL/PostgreSQL，不支持在此下载 .db 文件。请使用 mysqldump 或 pg_dump 在服务器上备份。")
     except FileNotFoundError as e:
         st.error(str(e))
     except OSError:
@@ -956,6 +1060,9 @@ def _render_db_backup_section():
 def _render_db_restore_section():
     """渲染数据库恢复上传与确认区域。"""
     st.subheader("⚡️ 危险操作：数据恢复")
+    if not IS_SQLITE:
+        st.info("当前使用 MySQL/PostgreSQL，不支持在此上传 .db 恢复。请使用 mysql/pg 客户端或备份工具从备份恢复。")
+        return
     restore_uploaded = st.file_uploader("上传备份文件以覆盖当前数据库", type=["db"], key="admin_restore_upload")
     if not restore_uploaded:
         return
@@ -974,8 +1081,11 @@ def _render_db_restore_section():
             with open(DATABASE_PATH, "wb") as f:
                 f.write(backup_bytes)
             st.cache_resource.clear()
+            st.cache_data.clear()
             _log_action(AUDIT_BACKUP, target="数据恢复", details=f"从文件 {restore_uploaded.name} 恢复")
+            logger.info("数据库恢复完成 文件=%s", restore_uploaded.name)
             st.success(SUCCESS_DB_RESTORED)
+            st.caption("数据已写入。若未看到更新请刷新或重启应用以使连接加载新数据。")
             st.balloons()
             time.sleep(2)
             st.rerun()
@@ -1172,7 +1282,7 @@ def render_admin_page():
 
     with db_session() as db:
         if nav_index == NAV_DASHBOARD:
-            _render_dashboard(db)
+            _render_dashboard()
         elif nav_index == NAV_MANAGEMENT:
             _render_management(db)
         elif nav_index == NAV_SYSTEM:

@@ -9,10 +9,10 @@ from typing import Any, Tuple
 
 import pandas as pd  # type: ignore[reportMissingImports]
 
-from database import DATABASE_DIR
+from .database import DATABASE_DIR, IS_SQLITE
 
 try:
-    from config import MAX_IMPORT_ROWS, STUDENT_ID_MAX_LEN, STUDENT_ID_MIN_LEN
+    from .config import MAX_IMPORT_ROWS, STUDENT_ID_MAX_LEN, STUDENT_ID_MIN_LEN
 except ImportError:
     STUDENT_ID_MIN_LEN = 1
     STUDENT_ID_MAX_LEN = 32
@@ -64,19 +64,6 @@ def validate_student_id(raw: Any) -> Tuple[bool, str]:
     if len(s) > STUDENT_ID_MAX_LEN:
         return False, f"学号长度不能超过 {STUDENT_ID_MAX_LEN} 位。"
     return True, ""
-
-
-def mask_student_id(text: Any) -> str:
-    """
-    学号脱敏：保留前 3 位与后 4 位，中间用 * 代替。
-    例如：202***********1234
-    """
-    if text is None or (isinstance(text, float) and pd.isna(text)):
-        return ""
-    s = str(text).strip()
-    if len(s) <= 7:
-        return "*" * len(s) if len(s) > 0 else ""
-    return s[:3] + "*" * (len(s) - 7) + s[-4:]
 
 
 def _get_excel_engine(uploaded_file: Any) -> str:
@@ -160,10 +147,14 @@ def auto_backup() -> str:
     """
     将 database.db 复制到 backups/ 目录，文件名带时间戳。
     仅保留最近 7 份备份，删除更早的。
+    使用 MySQL/PostgreSQL 时本函数直接返回，不执行文件备份（请使用 mysqldump/pg_dump 等）。
 
-    :return: 新备份文件的路径
+    :return: 新备份文件的路径（SQLite）；非 SQLite 时返回空字符串
     :raises OSError: 文件操作失败时抛出可读说明
     """
+    if not IS_SQLITE:
+        return ""
+
     try:
         if not os.path.isdir(BACKUPS_DIR):
             os.makedirs(BACKUPS_DIR, exist_ok=True)
@@ -204,11 +195,17 @@ def auto_backup() -> str:
 def get_db_file_bytes() -> bytes:
     """
     以二进制模式读取当前 database.db 文件，供下载按钮使用。
+    仅在使用 SQLite 时有效；使用 MySQL/PostgreSQL 时请通过 mysqldump/pg_dump 备份。
 
     :return: 数据库文件内容（bytes）
     :raises FileNotFoundError: 文件不存在
     :raises OSError: 读取失败
+    :raises NotImplementedError: 当前使用非 SQLite，不支持文件下载备份
     """
+    if not IS_SQLITE:
+        raise NotImplementedError(
+            "当前数据库为 MySQL/PostgreSQL，不支持下载 .db 文件。请使用 mysqldump 或 pg_dump 进行备份。"
+        )
     if not os.path.isfile(DATABASE_PATH):
         raise FileNotFoundError(f"数据库文件不存在：{DATABASE_PATH}")
     try:

@@ -5,8 +5,8 @@
 """
 import bcrypt
 
-from database import engine, SessionLocal
-from models import Base, User
+from core.database import engine, SessionLocal
+from core.models import Base, User
 
 
 def create_tables():

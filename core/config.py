@@ -66,8 +66,6 @@ LABEL_INIT_LIST = "初始化名单"
 LABEL_PAGE_SIZE = "每页条数"
 LABEL_SORT_COLUMN = "按列"
 LABEL_SORT_ORDER = "顺序"
-LABEL_TABLE_SORT = "表格排序"
-LABEL_DISPLAY_AND_SORT = "显示与排序"
 LABEL_DISPLAY_OPTIONS_EXPANDER = "显示选项（每页条数、排序列、顺序）"
 # 教师端批量比对仅含每页条数，与管理员名单的「显示选项」区分
 LABEL_BATCH_PAGE_OPTIONS = "每页条数"
@@ -165,3 +163,7 @@ SESSION_KEY_USERNAME = "username"
 SESSION_KEY_LAST_ACTIVITY = "last_activity_at"
 SESSION_KEY_LOGIN_FAIL_RECORDS = "login_fail_records"
 SESSION_KEY_AUTO_BACKUP_DONE = "auto_backup_done"
+
+# ---------- 日志（阶段四：统一路径，供 app 等使用） ----------
+LOG_SUBDIR = "logs"
+LOG_FILENAME = "app.log"

@@ -2,12 +2,15 @@
 登录页：表单校验、会话写入、登录审计日志、登录失败次数与冷却限制。
 由 app 在未登录时调用；登录成功后写入 session_state 并 rerun。
 """
+import logging
 import time
 
 import streamlit as st
 
-from auth import verify_password
-from config import (
+logger = logging.getLogger(__name__)
+
+from core.auth import verify_password
+from core.config import (
     AUDIT_LOGIN,
     BTN_LOGIN,
     LABEL_LOGIN_PASSWORD,
@@ -31,9 +34,9 @@ from config import (
     TITLE_APP,
     USERNAME_MAX_LEN,
 )
-from database import SessionLocal
-from models import AuditLog, User
-from session_store import create_session
+from core.database import SessionLocal
+from core.models import AuditLog, User
+from core.session_store import create_session
 
 
 def render_login_page():
@@ -77,14 +80,17 @@ def render_login_page():
         user = db.query(User).filter(User.username == username_stripped).first()
         if not user:
             _record_login_fail(st.session_state, username_stripped)
+            logger.info("登录失败 user=%s reason=user_not_found", username_stripped)
             _show_error(MSG_LOGIN_WRONG)
             return
         if not user.is_active:
             _record_login_fail(st.session_state, username_stripped)
+            logger.info("登录失败 user=%s reason=account_disabled", username_stripped)
             _show_error(MSG_ACCOUNT_DISABLED)
             return
         if not verify_password(password, user.password_hash):
             _record_login_fail(st.session_state, username_stripped)
+            logger.info("登录失败 user=%s reason=wrong_password", username_stripped)
             _show_error(MSG_LOGIN_WRONG)
             return
         # 校验通过：清除该账号失败记录
@@ -114,8 +120,10 @@ def render_login_page():
         st.session_state[SESSION_KEY_LAST_ACTIVITY] = time.time()
         token = create_session(user.id, user.username, user.role, user.full_name)
         st.query_params["sid"] = token
+        logger.info("登录成功 user=%s role=%s", username_stripped, user.role)
         st.rerun()
     except Exception:
+        logger.exception("登录过程异常 user=%s", username_stripped)
         _show_error(MSG_LOGIN_ERROR)
     finally:
         db.close()

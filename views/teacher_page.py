@@ -8,7 +8,7 @@ from io import BytesIO
 import pandas as pd
 import streamlit as st
 
-from config import (
+from core.config import (
     AUDIT_QUERY_BATCH,
     AUDIT_QUERY_SINGLE,
     AUDIT_TYPE_NAMES,
@@ -29,9 +29,9 @@ from config import (
     TITLE_TEACHER,
     TERM_DISHONEST_RECORD,
 )
-from database import SessionLocal, db_session
-from models import AuditLog, Blacklist
-from utils import (
+from core.database import SessionLocal, db_session
+from core.models import AuditLog, Blacklist
+from core.utils import (
     REQUIRED_EXCEL_COLUMNS,
     cell_str,
     clean_student_id,
@@ -269,11 +269,17 @@ def _render_batch_check():
         student_ids = df["学号"].dropna().astype(str).unique().tolist()
         db = SessionLocal()
         try:
-            matched = (
-                db.query(Blacklist)
-                .filter(Blacklist.status == 1, Blacklist.student_id.in_(student_ids))
-                .all()
-            )
+            # 学号按批查询（每批 500），避免大 IN 列表导致驱动/库报错或性能问题
+            BATCH_SIZE = 500
+            matched = []
+            for i in range(0, len(student_ids), BATCH_SIZE):
+                batch = student_ids[i : i + BATCH_SIZE]
+                batch_records = (
+                    db.query(Blacklist)
+                    .filter(Blacklist.status == 1, Blacklist.student_id.in_(batch))
+                    .all()
+                )
+                matched.extend(batch_records)
         except Exception as e:
             st.error("比对失败，" + MSG_TRY_AGAIN)
             return
