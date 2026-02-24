@@ -52,8 +52,7 @@ python -m pytest tests/ -v
   - `utils.py` — 学号清洗、Excel 解析、备份等工具
   - `session_store.py` — 基于 JSON 的服务端会话存储
 - `views/` — 登录、教师端、管理员端页面
-- `project_requirements.md` — 详细需求与约束说明
-- `docs/` — 架构、实施说明、审计与部署文档
+- `docs/` — 需求与架构总文档、实施说明、审计与部署文档
 
 ### 文档索引
 
