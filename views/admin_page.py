@@ -13,6 +13,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 import plotly.express as px
 import streamlit as st
+from plotly.subplots import make_subplots
 from sqlalchemy import func
 
 from core.config import (
@@ -139,6 +140,35 @@ def get_dashboard_year_counts():
     return [(int(y), int(c)) for y, c in zip(year_counts.iloc[:, 0].tolist(), year_counts.iloc[:, 1].tolist())]
 
 
+@st.cache_resource(ttl=DASHBOARD_CACHE_TTL)
+def _get_dashboard_combined_figure(major_counts_tuple, year_counts_tuple):
+    """专业分布饼图与年份柱状图合并为单图并缓存，仅一次 st.plotly_chart，减轻折叠侧栏时重绘。"""
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        specs=[[{"type": "pie"}, {"type": "bar"}]],
+        subplot_titles=("专业分布", "按处分年份分布"),
+    )
+    if major_counts_tuple:
+        counts_df = pd.DataFrame(list(major_counts_tuple), columns=["专业", "人数"])
+        fig_pie = px.pie(counts_df, values="人数", names="专业")
+        fig.add_trace(fig_pie.data[0], row=1, col=1)
+    if year_counts_tuple:
+        year_df = pd.DataFrame(list(year_counts_tuple), columns=["年份", "人数"])
+        fig_bar = px.bar(year_df, x="年份", y="人数")
+        fig.add_trace(fig_bar.data[0], row=1, col=2)
+    if not major_counts_tuple and not year_counts_tuple:
+        return None
+    fig.update_layout(
+        height=320,
+        margin={"l": 20, "r": 20, "t": 50, "b": 20},
+        showlegend=True,
+    )
+    fig.update_xaxes(title_text="年份", row=1, col=2)
+    fig.update_yaxes(title_text="人数", row=1, col=2)
+    return fig
+
+
 @st.cache_data(ttl=DASHBOARD_CACHE_TTL)
 def get_recent_blacklist_rows():
     """近期名单变动：返回最多 10 条，每条为 dict（姓名、学号、专业、状态、创建/更新）。"""
@@ -174,26 +204,18 @@ def _render_dashboard_metrics():
 
 
 def _render_dashboard_charts():
-    """仪表盘：专业分布饼图与按处分年份分布柱状图（使用短时缓存）。"""
-    chart_col1, chart_col2 = st.columns(2)
-    with chart_col1:
-        st.subheader("专业分布")
-        major_counts = get_dashboard_major_counts()
-        if not major_counts:
-            st.caption("暂无生效记录，无法生成专业分布图。")
-        else:
-            counts_df = pd.DataFrame(major_counts, columns=["专业", "人数"])
-            fig = px.pie(counts_df, values="人数", names="专业", title="专业分布")
-            st.plotly_chart(fig, use_container_width=True)
-    with chart_col2:
-        st.subheader("按处分年份分布")
-        year_counts = get_dashboard_year_counts()
-        if not year_counts:
-            st.caption("暂无处分日期数据，无法生成年份分布图。")
-        else:
-            year_df = pd.DataFrame(year_counts, columns=["年份", "人数"])
-            fig_bar = px.bar(year_df, x="年份", y="人数", title="按处分年份分布")
-            st.plotly_chart(fig_bar, use_container_width=True)
+    """仪表盘：专业分布与年份分布合并为单图、一次渲染，减轻折叠侧栏时卡顿。"""
+    major_counts = get_dashboard_major_counts()
+    year_counts = get_dashboard_year_counts()
+    if not major_counts and not year_counts:
+        st.caption("暂无生效记录或处分日期数据，无法生成分布图。")
+        return
+    fig = _get_dashboard_combined_figure(
+        tuple((m, c) for m, c in major_counts) if major_counts else (),
+        tuple((y, c) for y, c in year_counts) if year_counts else (),
+    )
+    if fig is not None:
+        st.plotly_chart(fig, use_container_width=False, key="admin_dashboard_charts")
 
 
 def _render_dashboard_recent():
@@ -216,6 +238,12 @@ def _render_dashboard():
     _render_dashboard_metrics()
     _render_dashboard_charts()
     _render_dashboard_recent()
+
+
+@st.fragment
+def _dashboard_fragment():
+    """仪表盘以 fragment 包裹，仅仪表盘内交互时局部重跑，减轻整页重跑。"""
+    _render_dashboard()
 
 
 def _render_import_last_result():
@@ -1282,7 +1310,7 @@ def render_admin_page():
 
     with db_session() as db:
         if nav_index == NAV_DASHBOARD:
-            _render_dashboard()
+            _dashboard_fragment()
         elif nav_index == NAV_MANAGEMENT:
             _render_management(db)
         elif nav_index == NAV_SYSTEM:

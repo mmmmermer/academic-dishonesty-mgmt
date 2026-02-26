@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 生产备份示例（阶段四）：按需替换 用户、库名、路径 后使用。
-# 详见 docs/阶段一实施说明.md 与 docs/阶段四实施说明.md。
+# 详见 docs/阶段实施与审计.md
 
 # MySQL 示例（替换 YOUR_USER、YOUR_DB、/path/to/backups）
 # mysqldump -uYOUR_USER -p YOUR_DB > /path/to/backups/backup_$(date +%Y%m%d_%H%M%S).sql
