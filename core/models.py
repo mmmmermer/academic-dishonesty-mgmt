@@ -9,11 +9,14 @@ from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
 
+_MYSQL_TABLE_OPTS = {"mysql_charset": "utf8mb4", "mysql_collate": "utf8mb4_unicode_ci"}
+
 
 class User(Base):
     """用户表 (users)"""
 
     __tablename__ = "users"
+    __table_args__ = _MYSQL_TABLE_OPTS
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(64), nullable=False, unique=True, comment="登录账号(工号/ID)")
@@ -28,8 +31,9 @@ class Blacklist(Base):
 
     __tablename__ = "blacklist"
     __table_args__ = (
-        Index("ix_blacklist_status_id_card", "status", "id_card"),  # 库内分页/筛选：status + 学号
-        Index("ix_blacklist_status_name", "status", "name"),  # 库内分页/筛选：status + 姓名
+        Index("ix_blacklist_status_id_card", "status", "id_card"),
+        Index("ix_blacklist_status_name", "status", "name"),
+        _MYSQL_TABLE_OPTS,
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -47,7 +51,7 @@ class AuditLog(Base):
     """审计日志表 (audit_logs)，只增不减"""
 
     __tablename__ = "audit_logs"
-    __table_args__ = (Index("ix_audit_log_timestamp", "timestamp"),)  # 列表/导出按时间倒序
+    __table_args__ = (Index("ix_audit_log_timestamp", "timestamp"), _MYSQL_TABLE_OPTS)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     operator_name = Column(String(64), nullable=False, comment="操作人姓名(冗余存储)")

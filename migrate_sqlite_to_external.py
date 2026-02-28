@@ -42,11 +42,7 @@ def main():
         # 防止重复迁移：目标库已有用户数据时视为已迁移，避免重复插入与唯一约束冲突
         if dst_session.query(User).count() > 0:
             print("目标库已有用户数据，视为已迁移。若需重新迁移请使用空库，或手动清空目标表后再运行。")
-            src_session.close()
-            dst_session.close()
-            dst_engine.dispose()
-            src_engine.dispose()
-            sys.exit(0)
+            return
 
         # 1. User（不复制 id，由目标库自增）
         users = src_session.query(User).all()

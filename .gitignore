@@ -3,6 +3,9 @@
 *.db-journal
 backups/
 
+# 环境变量（含数据库密码，不提交）
+.env
+
 # 服务端 session 文件（含 token，不提交）
 sessions.json
 
