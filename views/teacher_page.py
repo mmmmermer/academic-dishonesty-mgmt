@@ -29,32 +29,19 @@ from core.config import (
     TITLE_TEACHER,
     TERM_DISHONEST_RECORD,
 )
-from core.database import SessionLocal, db_session
+from sqlalchemy import and_, or_
+
+from core.database import db_session
 from core.models import AuditLog, Blacklist
+from views.components import render_simple_pagination
 from core.utils import (
     REQUIRED_EXCEL_COLUMNS,
     cell_str,
     clean_student_id,
+    log_audit_action,
     parse_batch_check_excel,
     validate_student_id,
 )
-
-
-def _log_teacher_action(action_type: str, target: str = "", details: str = ""):
-    """教师端写入审计日志（如批量比对）。"""
-    with db_session() as db:
-        try:
-            name = st.session_state.get(SESSION_KEY_USER_NAME, "未知")
-            log = AuditLog(
-                operator_name=name,
-                action_type=action_type,
-                target=target[:256] if target else None,
-                details=details[:4096] if details else None,
-            )
-            db.add(log)
-            db.commit()
-        except Exception:
-            db.rollback()
 
 
 def _render_my_logs():
@@ -151,11 +138,14 @@ def _parse_one_line(line: str):
         id_clean = clean_student_id(id_raw)
         if id_clean:
             return (name_part if name_part else None, id_clean)
-    # 无学号段则整行作为姓名或学号
+    # 无 ≥6 位连续数字：清洗后与原文一致说明无空白/全角变换，视为纯姓名
     clean = clean_student_id(line)
     if clean == line:
         return (line, None)
-    return (line if not clean else None, clean if clean else None)
+    # 清洗后有变化且非空，视为学号（含空白或全角数字）；否则视为姓名
+    if clean:
+        return (None, clean)
+    return (line, None)
 
 def _render_single_search():
     """单条查询：支持「姓名 学号」、纯姓名、纯学号；每行一人，可多行查多人。"""
@@ -201,21 +191,22 @@ def _render_single_search():
         st.error("请输入至少一个有效的姓名或学号。")
         return
 
-    db = SessionLocal()
-    try:
-        with st.spinner("正在查询..."):
-            seen_sids = set()
-            rows = []
-            for name_part, id_part in parsed:
-                q = db.query(Blacklist).filter(Blacklist.status == 1)
-                if name_part is not None and id_part is not None:
-                    # 「姓名 学号」：精确匹配同一人
-                    q = q.filter(Blacklist.name == name_part, Blacklist.student_id == id_part)
-                elif id_part is not None:
-                    q = q.filter(Blacklist.student_id == id_part)
-                else:
-                    q = q.filter(Blacklist.name == name_part)
-                for r in q.all():
+    with db_session() as db:
+        try:
+            with st.spinner("正在查询..."):
+                # 将多条件合并为单次 OR 查询，避免 N+1
+                conditions = []
+                for name_part, id_part in parsed:
+                    if name_part is not None and id_part is not None:
+                        conditions.append(and_(Blacklist.name == name_part, Blacklist.student_id == id_part))
+                    elif id_part is not None:
+                        conditions.append(Blacklist.student_id == id_part)
+                    else:
+                        conditions.append(Blacklist.name == name_part)
+                results = db.query(Blacklist).filter(Blacklist.status == 1, or_(*conditions)).all()
+                seen_sids = set()
+                rows = []
+                for r in results:
                     if r.student_id not in seen_sids:
                         seen_sids.add(r.student_id)
                         rows.append({
@@ -225,13 +216,11 @@ def _render_single_search():
                             "原因": (r.reason or "")[:80],
                             "处分时间": str(r.punishment_date) if r.punishment_date else "",
                         })
-    except Exception:
-        st.error("查询失败，" + MSG_TRY_AGAIN)
-        return
-    finally:
-        db.close()
+        except Exception:
+            st.error("查询失败，" + MSG_TRY_AGAIN)
+            return
 
-    _log_teacher_action(AUDIT_QUERY_SINGLE, target="", details=f"查询 {len(parsed)} 人，命中 {len(rows)} 人")
+    log_audit_action(AUDIT_QUERY_SINGLE, target="", details=f"查询 {len(parsed)} 人，命中 {len(rows)} 人")
 
     if not rows:
         st.success(MSG_NO_RECORD_GOOD)
@@ -267,26 +256,23 @@ def _render_batch_check():
             return
 
         student_ids = df["学号"].dropna().astype(str).unique().tolist()
-        db = SessionLocal()
-        try:
-            # 学号按批查询（每批 500），避免大 IN 列表导致驱动/库报错或性能问题
-            BATCH_SIZE = 500
-            matched = []
-            for i in range(0, len(student_ids), BATCH_SIZE):
-                batch = student_ids[i : i + BATCH_SIZE]
-                batch_records = (
-                    db.query(Blacklist)
-                    .filter(Blacklist.status == 1, Blacklist.student_id.in_(batch))
-                    .all()
-                )
-                matched.extend(batch_records)
-        except Exception as e:
-            st.error("比对失败，" + MSG_TRY_AGAIN)
-            return
-        finally:
-            db.close()
+        with db_session() as db:
+            try:
+                BATCH_SIZE = 500
+                matched = []
+                for i in range(0, len(student_ids), BATCH_SIZE):
+                    batch = student_ids[i : i + BATCH_SIZE]
+                    batch_records = (
+                        db.query(Blacklist)
+                        .filter(Blacklist.status == 1, Blacklist.student_id.in_(batch))
+                        .all()
+                    )
+                    matched.extend(batch_records)
+            except Exception:
+                st.error("比对失败，" + MSG_TRY_AGAIN)
+                return
 
-        _log_teacher_action(AUDIT_QUERY_BATCH, target=uploaded.name, details=f"共 {len(student_ids)} 条，命中 {len(matched)} 条")
+        log_audit_action(AUDIT_QUERY_BATCH, target=uploaded.name, details=f"共 {len(student_ids)} 条，命中 {len(matched)} 条")
 
         # 按学号构建上传名单行（与导入格式一致：姓名、学号、专业、原因、处分时间），每学号取首行（无命中时也需展示/导出）
         id_to_upload_row = {}
@@ -372,23 +358,7 @@ def _render_batch_check():
             for d in page_data
         ])
         st.dataframe(batch_table, use_container_width=True, hide_index=True)
-        col_prev, col_info, col_next = st.columns([1, 2, 1])
-        with col_prev:
-            if current_page > 0:
-                if st.button("上一页", key="teacher_batch_prev"):
-                    st.session_state["teacher_batch_page"] = current_page - 1
-                    st.rerun()
-            else:
-                st.button("上一页", key="teacher_batch_prev", disabled=True)
-        with col_info:
-            st.caption(f"第 {current_page + 1} 页 / 共 {total_pages} 页，本页 {len(page_data)} 条")
-        with col_next:
-            if current_page < total_pages - 1:
-                if st.button("下一页", key="teacher_batch_next"):
-                    st.session_state["teacher_batch_page"] = current_page + 1
-                    st.rerun()
-            else:
-                st.button("下一页", key="teacher_batch_next", disabled=True)
+        render_simple_pagination("teacher_batch_page", current_page, total_pages, len(page_data))
 
     # 未命中人员：与命中表相同的列（姓名、学号、专业、原因、处分时间），分页展示
     upload_rows = st.session_state.get("teacher_batch_upload_rows", [])
@@ -425,23 +395,7 @@ def _render_batch_check():
                 st.rerun()
         unmatched_table = pd.DataFrame([{c: d.get(c, "") for c in REQUIRED_EXCEL_COLUMNS} for d in page_data_u])
         st.dataframe(unmatched_table, use_container_width=True, hide_index=True)
-        col_u1, col_u2, col_u3 = st.columns([1, 2, 1])
-        with col_u1:
-            if current_page_u > 0:
-                if st.button("上一页", key="teacher_batch_unmatched_prev"):
-                    st.session_state["teacher_batch_unmatched_page"] = current_page_u - 1
-                    st.rerun()
-            else:
-                st.button("上一页", key="teacher_batch_unmatched_prev", disabled=True)
-        with col_u2:
-            st.caption(f"第 {current_page_u + 1} 页 / 共 {total_pages_u} 页，本页 {len(page_data_u)} 条")
-        with col_u3:
-            if current_page_u < total_pages_u - 1:
-                if st.button("下一页", key="teacher_batch_unmatched_next"):
-                    st.session_state["teacher_batch_unmatched_page"] = current_page_u + 1
-                    st.rerun()
-            else:
-                st.button("下一页", key="teacher_batch_unmatched_next", disabled=True)
+        render_simple_pagination("teacher_batch_unmatched_page", current_page_u, total_pages_u, len(page_data_u))
     else:
         st.caption("名单内全部命中，无未命中人员。")
 

@@ -34,9 +34,10 @@ from core.config import (
     TITLE_APP,
     USERNAME_MAX_LEN,
 )
-from core.database import SessionLocal
-from core.models import AuditLog, User
+from core.database import db_session
+from core.models import User
 from core.session_store import create_session
+from core.utils import log_audit_action
 
 
 def render_login_page():
@@ -75,58 +76,47 @@ def render_login_page():
             return
         # 冷却期已过则继续尝试，后续失败会重新计数
 
-    db = SessionLocal()
-    try:
-        user = db.query(User).filter(User.username == username_stripped).first()
-        if not user:
-            _record_login_fail(st.session_state, username_stripped)
-            logger.info("登录失败 user=%s reason=user_not_found", username_stripped)
-            _show_error(MSG_LOGIN_WRONG)
-            return
-        if not user.is_active:
-            _record_login_fail(st.session_state, username_stripped)
-            logger.info("登录失败 user=%s reason=account_disabled", username_stripped)
-            _show_error(MSG_ACCOUNT_DISABLED)
-            return
-        if not verify_password(password, user.password_hash):
-            _record_login_fail(st.session_state, username_stripped)
-            logger.info("登录失败 user=%s reason=wrong_password", username_stripped)
-            _show_error(MSG_LOGIN_WRONG)
-            return
-        # 校验通过：清除该账号失败记录
-        rec = st.session_state.get(SESSION_KEY_LOGIN_FAIL_RECORDS)
-        if rec and username_stripped in rec:
-            del rec[username_stripped]
-        # 写登录审计日志
-        log_db = SessionLocal()
+    with db_session() as db:
         try:
-            log_db.add(AuditLog(
-                operator_name=user.full_name,
-                action_type=AUDIT_LOGIN,
-                target=user.username,
-                details="",
-            ))
-            log_db.commit()
+            user = db.query(User).filter(User.username == username_stripped).first()
+            if not user:
+                _record_login_fail(st.session_state, username_stripped)
+                logger.info("登录失败 user=%s reason=user_not_found", username_stripped)
+                _show_error(MSG_LOGIN_WRONG)
+                return
+            if not user.is_active:
+                _record_login_fail(st.session_state, username_stripped)
+                logger.info("登录失败 user=%s reason=account_disabled", username_stripped)
+                _show_error(MSG_ACCOUNT_DISABLED)
+                return
+            if not verify_password(password, user.password_hash):
+                _record_login_fail(st.session_state, username_stripped)
+                logger.info("登录失败 user=%s reason=wrong_password", username_stripped)
+                _show_error(MSG_LOGIN_WRONG)
+                return
+            # 校验通过：清除该账号失败记录
+            rec = st.session_state.get(SESSION_KEY_LOGIN_FAIL_RECORDS)
+            if rec and username_stripped in rec:
+                del rec[username_stripped]
+            # 写入会话状态（在 db_session 关闭前读取 user 属性）
+            user_id, user_role, user_full_name, user_username = user.id, user.role, user.full_name, user.username
         except Exception:
-            log_db.rollback()
-        finally:
-            log_db.close()
-        # 写入会话并刷新；写入 URL 的 sid 以便刷新页面后仍能恢复登录态
-        st.session_state[SESSION_KEY_LOGGED_IN] = True
-        st.session_state[SESSION_KEY_USER_ROLE] = user.role
-        st.session_state[SESSION_KEY_USER_NAME] = user.full_name
-        st.session_state[SESSION_KEY_USER_ID] = user.id
-        st.session_state[SESSION_KEY_USERNAME] = user.username
-        st.session_state[SESSION_KEY_LAST_ACTIVITY] = time.time()
-        token = create_session(user.id, user.username, user.role, user.full_name)
-        st.query_params["sid"] = token
-        logger.info("登录成功 user=%s role=%s", username_stripped, user.role)
-        st.rerun()
-    except Exception:
-        logger.exception("登录过程异常 user=%s", username_stripped)
-        _show_error(MSG_LOGIN_ERROR)
-    finally:
-        db.close()
+            logger.exception("登录过程异常 user=%s", username_stripped)
+            _show_error(MSG_LOGIN_ERROR)
+            return
+
+    # DB 会话已关闭，写审计日志用独立会话
+    log_audit_action(AUDIT_LOGIN, target=user_username, details="")
+    st.session_state[SESSION_KEY_LOGGED_IN] = True
+    st.session_state[SESSION_KEY_USER_ROLE] = user_role
+    st.session_state[SESSION_KEY_USER_NAME] = user_full_name
+    st.session_state[SESSION_KEY_USER_ID] = user_id
+    st.session_state[SESSION_KEY_USERNAME] = user_username
+    st.session_state[SESSION_KEY_LAST_ACTIVITY] = time.time()
+    token = create_session(user_id, user_username, user_role, user_full_name)
+    st.query_params["sid"] = token
+    logger.info("登录成功 user=%s role=%s", username_stripped, user_role)
+    st.rerun()
 
 
 def _record_login_fail(session_state, username_stripped: str) -> None:

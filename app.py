@@ -269,8 +269,8 @@ def main():
         logger.exception("应用未捕获异常")
         st.error(MSG_SYSTEM_ERROR)
         with st.expander("技术详情（供管理员排查）", expanded=False):
-            st.code(str(e), language="text")
-            st.caption("完整堆栈已写入 logs/app.log。")
+            st.code(f"{type(e).__name__}: 详情已记录至日志", language="text")
+            st.caption("完整堆栈已写入 logs/app.log，请查看日志排查问题。")
         st.stop()
 
 

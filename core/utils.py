@@ -1,5 +1,5 @@
 """
-工具模块：学号处理、Excel 解析、备份逻辑
+工具模块：学号处理、Excel 解析、备份逻辑、审计日志写入
 """
 import os
 import shutil
@@ -8,15 +8,19 @@ from io import BytesIO
 from typing import Any, Tuple
 
 import pandas as pd  # type: ignore[reportMissingImports]
+import streamlit as st
 
-from .database import DATABASE_DIR, IS_SQLITE
+from .database import DATABASE_DIR, IS_SQLITE, db_session
+from .models import AuditLog
 
 try:
-    from .config import MAX_IMPORT_ROWS, STUDENT_ID_MAX_LEN, STUDENT_ID_MIN_LEN
+    from .config import MAX_IMPORT_ROWS, MAX_UPLOAD_FILE_BYTES, SESSION_KEY_USER_NAME, STUDENT_ID_MAX_LEN, STUDENT_ID_MIN_LEN
 except ImportError:
     STUDENT_ID_MIN_LEN = 1
     STUDENT_ID_MAX_LEN = 32
     MAX_IMPORT_ROWS = 10000
+    MAX_UPLOAD_FILE_BYTES = 10 * 1024 * 1024
+    SESSION_KEY_USER_NAME = "user_name"
 
 # 数据库文件路径
 DATABASE_PATH = os.path.join(DATABASE_DIR, "database.db")
@@ -78,6 +82,14 @@ def _get_excel_engine(uploaded_file: Any) -> str:
     return "openpyxl"
 
 
+def _check_file_size(uploaded_file: Any):
+    """检查上传文件大小，超过限制则抛 ValueError。"""
+    size = getattr(uploaded_file, "size", None)
+    if size is not None and size > MAX_UPLOAD_FILE_BYTES:
+        limit_mb = MAX_UPLOAD_FILE_BYTES / (1024 * 1024)
+        raise ValueError(f"上传文件过大（{size / (1024 * 1024):.1f} MB），单次最大 {limit_mb:.0f} MB，请精简后重试。")
+
+
 def parse_blacklist_excel(uploaded_file: Any) -> pd.DataFrame:
     """
     解析黑名单 Excel：校验必需列、清洗学号后返回 DataFrame。
@@ -87,6 +99,7 @@ def parse_blacklist_excel(uploaded_file: Any) -> pd.DataFrame:
     :return: 清洗后的 DataFrame
     :raises ValueError: 缺少必要列时抛出中文说明
     """
+    _check_file_size(uploaded_file)
     try:
         if hasattr(uploaded_file, "read"):
             raw = uploaded_file.read()
@@ -119,6 +132,7 @@ def parse_batch_check_excel(uploaded_file: Any) -> pd.DataFrame:
     解析批量比对用 Excel：至少包含「学号」列，清洗后返回。
     可选列：姓名（用于报告显示）。
     """
+    _check_file_size(uploaded_file)
     try:
         if hasattr(uploaded_file, "read"):
             raw = uploaded_file.read()
@@ -213,3 +227,20 @@ def get_db_file_bytes() -> bytes:
             return f.read()
     except OSError as e:
         raise OSError(f"读取数据库文件失败：{e!s}") from e
+
+
+def log_audit_action(action_type: str, target: str = "", details: str = ""):
+    """写入审计日志，供所有视图层统一调用。操作人从 session_state 获取。"""
+    with db_session() as db:
+        try:
+            name = st.session_state.get(SESSION_KEY_USER_NAME, "未知")
+            log = AuditLog(
+                operator_name=name,
+                action_type=action_type,
+                target=target[:256] if target else None,
+                details=details[:4096] if details else None,
+            )
+            db.add(log)
+            db.commit()
+        except Exception:
+            db.rollback()

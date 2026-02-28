@@ -58,6 +58,8 @@ LIST_PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
 BATCH_IMPORT_COMMIT_EVERY = 100
 # 单次导入最大行数，超过则拒绝，避免内存耗尽
 MAX_IMPORT_ROWS = 10000
+# 上传 Excel 文件大小上限（字节），超过则拒绝，避免内存耗尽
+MAX_UPLOAD_FILE_BYTES = 10 * 1024 * 1024  # 10 MB
 
 # ---------- 业务文案常量（便于统一修改与 i18n） ----------
 PLACEHOLDER_FILTER_EMPTY = "留空不限制"
