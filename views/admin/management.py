@@ -2,6 +2,8 @@
 管理员名单管理：批量导入、手动新增、生效名单、已撤销名单、编辑。
 """
 import logging
+import os
+import time
 from datetime import datetime
 from io import BytesIO
 
@@ -21,6 +23,8 @@ from core.config import (
     LABEL_MAJOR,
     LABEL_NAME,
     LABEL_PUNISHMENT_DATE,
+    LABEL_IMPACT_START,
+    LABEL_IMPACT_END,
     LABEL_REASON,
     LABEL_STUDENT_ID,
     MIME_XLSX,
@@ -51,8 +55,7 @@ from views.components import (
     clamp_page,
     render_blacklist_export_button,
     render_blacklist_table,
-    render_display_options,
-    render_filter_inputs,
+    render_list_controls,
     render_pagination,
 )
 
@@ -198,7 +201,7 @@ def _render_import_section(db):
 # ── 手动新增 ──────────────────────────────────────────────
 
 
-def _try_manual_add(db, add_name, add_student_id, add_major, add_reason, add_date):
+def _try_manual_add(db, add_name, add_student_id, add_major, add_reason_file, add_date, add_impact_start, add_impact_end):
     if not add_name or not add_student_id:
         st.error(f"请填写{LABEL_NAME}和{LABEL_STUDENT_ID}。")
         return False
@@ -206,6 +209,16 @@ def _try_manual_add(db, add_name, add_student_id, add_major, add_reason, add_dat
     if not ok_sid:
         st.error(err_sid or MSG_ENTER_VALID_SID)
         return False
+        
+    pdf_path = None
+    if add_reason_file is not None:
+        os.makedirs(os.path.join("static", "pdfs"), exist_ok=True)
+        filename = f"{clean_student_id(add_student_id)}_{int(time.time())}.pdf"
+        file_path = os.path.join("static", "pdfs", filename)
+        with open(file_path, "wb") as f:
+            f.write(add_reason_file.getvalue())
+        pdf_path = f"/app/static/pdfs/{filename}"
+
     try:
         with st.spinner("正在保存..."):
             sid_clean = clean_student_id(add_student_id)
@@ -214,8 +227,11 @@ def _try_manual_add(db, add_name, add_student_id, add_major, add_reason, add_dat
                 return False
             rec = Blacklist(
                 name=add_name.strip(), student_id=sid_clean,
-                major=add_major.strip() or None, reason=add_reason.strip() or None,
-                punishment_date=add_date, status=1,
+                major=add_major.strip() or None, reason=pdf_path,
+                punishment_date=add_date, 
+                impact_start_date=add_impact_start,
+                impact_end_date=add_impact_end,
+                status=1,
             )
             db.add(rec)
             db.commit()
@@ -235,39 +251,54 @@ def _render_manual_add_section(db):
         add_name = st.text_input(LABEL_NAME, key="add_name")
         add_student_id = st.text_input(LABEL_STUDENT_ID, key="add_student_id")
         add_major = st.text_input(LABEL_MAJOR, key="add_major")
-        add_reason = st.text_area(LABEL_REASON, key="add_reason")
+        add_reason_file = st.file_uploader(f"{LABEL_REASON} (PDF)", type=["pdf"], key="add_reason_file")
         add_date = st.date_input(LABEL_PUNISHMENT_DATE, key="add_date")
-        if st.form_submit_button("添加") and _try_manual_add(db, add_name, add_student_id, add_major, add_reason, add_date):
+        
+        impact_dates = st.date_input("处理起至时间 (可选)", value=[], key="add_impact_dates")
+        add_impact_start = impact_dates[0] if impact_dates and len(impact_dates) > 0 else None
+        add_impact_end = impact_dates[1] if impact_dates and len(impact_dates) == 2 else None
+            
+        if st.form_submit_button("添加") and _try_manual_add(db, add_name, add_student_id, add_major, add_reason_file, add_date, add_impact_start, add_impact_end):
             st.rerun()
 
 
 # ── 生效名单 ──────────────────────────────────────────────
 
 
-def _render_effective_delete_block(db):
-    del_sid_input = st.text_input(f"输入要删除的{LABEL_STUDENT_ID}", key="del_student_id", placeholder=LABEL_STUDENT_ID)
-    if not (st.button("软删除（设为已撤销）", key="admin_del_btn") and del_sid_input):
-        return
-    ok_del, err_del = validate_student_id(del_sid_input)
-    if not ok_del:
-        st.error(err_del or MSG_ENTER_VALID_SID)
-        return
-    try:
-        sid_clean = clean_student_id(del_sid_input.strip())
-        rec = db.query(Blacklist).filter(Blacklist.status == 1, Blacklist.student_id == sid_clean).first()
-        if not rec:
-            st.error(MSG_NOT_FOUND_EFFECTIVE)
+def _render_modify_delete_section(db):
+    st.subheader("检索与操作")
+    st.caption("输入工号/学号以专门检索单条记录，确认无误再执行编辑或废弃操作。")
+    sid_input = st.text_input(f"请输入要操作的 {LABEL_STUDENT_ID}", key="mod_sid_input", placeholder=LABEL_STUDENT_ID)
+    if sid_input:
+        ok_sid, err_sid = validate_student_id(sid_input)
+        if not ok_sid:
+            st.warning(err_sid or MSG_ENTER_VALID_SID)
             return
-        with st.spinner("正在更新..."):
-            rec.status = 0
-            db.commit()
-            log_audit_action(AUDIT_DELETE, target=sid_clean[:16], details=f"软删除：{rec.name} {sid_clean[:8]}***")
-        logger.info("名单软删除学号=%s", sid_clean[:16])
-        st.success("已软删除。")
-        st.rerun()
-    except Exception:
-        db.rollback()
-        st.error("删除操作失败，" + MSG_TRY_AGAIN)
+        try:
+            sid_clean = clean_student_id(sid_input.strip())
+            rec = db.query(Blacklist).filter(Blacklist.status == 1, Blacklist.student_id == sid_clean).first()
+            if not rec:
+                st.warning(f"未在当前生效库中找到该 {LABEL_STUDENT_ID} 的记录。")
+                return
+            st.info(f"**查找到人员**：姓名【{rec.name}】，单位【{rec.major or '-'}】，认定日期【{rec.punishment_date or '-'}】")
+            col_ed, col_del = st.columns(2)
+            with col_ed:
+                if st.button("📝 编辑该信息", key="admin_mod_edit_btn"):
+                    st.session_state["admin_edit_id"] = rec.id
+                    st.rerun()
+            with col_del:
+                if st.button("🗑️ 撤销（软删除）此记录", key="admin_mod_del_btn"):
+                    with st.spinner("正在废弃记录..."):
+                        rec.status = 0
+                        db.commit()
+                        log_audit_action(AUDIT_DELETE, target=sid_clean[:16], details=f"软删除：{rec.name} {sid_clean[:8]}***")
+                    if "admin_edit_id" in st.session_state:
+                        del st.session_state["admin_edit_id"]
+                    st.success("记录已成功撤销，现已移动至已撤销名单汇总里。")
+                    st.rerun()
+        except Exception:
+            db.rollback()
+            st.error("操作失败，" + MSG_TRY_AGAIN)
 
 
 def _render_effective_init_block(db):
@@ -301,56 +332,7 @@ def _render_effective_init_block(db):
             st.rerun()
 
 
-def _render_effective_edit_block(db):
-    edit_sid_input = st.text_input(f"输入要编辑的{LABEL_STUDENT_ID}", key="edit_student_id", placeholder=LABEL_STUDENT_ID)
-    if not (st.button("编辑", key="admin_edit_btn") and edit_sid_input):
-        return
-    ok_edit, err_edit = validate_student_id(edit_sid_input)
-    if not ok_edit:
-        st.error(err_edit or MSG_ENTER_VALID_SID)
-        return
-    try:
-        sid_edit = clean_student_id(edit_sid_input.strip())
-        rec = db.query(Blacklist).filter(Blacklist.status == 1, Blacklist.student_id == sid_edit).first()
-        if not rec:
-            st.error(MSG_NOT_FOUND_EFFECTIVE)
-            return
-        st.session_state["admin_edit_id"] = rec.id
-        st.rerun()
-    except Exception:
-        db.rollback()
-        st.error("查找记录失败，" + MSG_TRY_AGAIN)
 
-
-def _render_effective_actions_expander(db):
-    with st.expander("▶ 按学号删除、初始化名单、编辑", expanded=False):
-        st.caption("按学号软删除、一键初始化生效名单、按学号进入编辑。")
-        _render_effective_delete_block(db)
-        st.divider()
-        _render_effective_init_block(db)
-        st.divider()
-        _render_effective_edit_block(db)
-
-
-def _render_effective_list_section(db):
-    st.subheader("生效名单")
-    st.caption(CAPTION_FILTER_BY_NAME_SID_MAJOR)
-    fn, fs, fm = render_filter_inputs("admin_effective")
-    page_size, sort_key, sort_asc = render_display_options("admin_effective")
-    base = build_blacklist_query(db, status=1, name_filter=fn, sid_filter=fs, major_filter=fm)
-    total = base.count()
-    if total == 0:
-        st.caption(EMPTY_NO_EFFECTIVE)
-        _render_effective_actions_expander(db)
-        return
-    ordered = apply_blacklist_sort(base, sort_key, sort_asc)
-    total_pages = max(1, (total + page_size - 1) // page_size)
-    page = clamp_page("admin_effective_page", total_pages)
-    page_records = ordered.offset(page * page_size).limit(page_size).all()
-    render_blacklist_table(page_records, page_size, page)
-    render_pagination("admin_effective_page", page, total_pages, total, len(page_records))
-    render_blacklist_export_button(db, 1, fn, fs, fm, sort_key, sort_asc, total, "生效名单", "admin_export_effective")
-    _render_effective_actions_expander(db)
 
 
 # ── 编辑表单 ──────────────────────────────────────────────
@@ -361,12 +343,23 @@ def _clear_edit_id():
         del st.session_state["admin_edit_id"]
 
 
-def _try_save_edit_form(edit_db, rec, edit_id, edit_name, edit_major, edit_reason, edit_date):
+def _try_save_edit_form(edit_db, rec, edit_id, edit_name, edit_major, edit_reason_file, edit_date, edit_impact_start, edit_impact_end):
     try:
         rec.name = (edit_name or "").strip() or rec.name
         rec.major = (edit_major or "").strip() or None
-        rec.reason = (edit_reason or "").strip() or None
+        
+        if edit_reason_file is not None:
+            os.makedirs(os.path.join("static", "pdfs"), exist_ok=True)
+            filename = f"{clean_student_id(rec.student_id)}_{int(time.time())}.pdf"
+            file_path = os.path.join("static", "pdfs", filename)
+            with open(file_path, "wb") as f:
+                f.write(edit_reason_file.getvalue())
+            rec.reason = f"/app/static/pdfs/{filename}"
+            
         rec.punishment_date = edit_date
+        rec.impact_start_date = edit_impact_start
+        rec.impact_end_date = edit_impact_end
+        
         edit_db.commit()
         log_audit_action(AUDIT_ADD, target=f"编辑记录 {edit_id}", details=f"{rec.name} {rec.student_id[:8]}***")
         _clear_edit_id()
@@ -393,16 +386,30 @@ def _render_edit_form_section():
             edit_name = st.text_input(LABEL_NAME, value=rec.name, key="admin_edit_name")
             st.text_input(f"{LABEL_STUDENT_ID}（不可修改）", value=rec.student_id, disabled=True, key="admin_edit_sid_display")
             edit_major = st.text_input(LABEL_MAJOR, value=rec.major or "", key="admin_edit_major")
-            edit_reason = st.text_area(LABEL_REASON, value=rec.reason or "", key="admin_edit_reason")
+            if rec.reason:
+                st.caption(f"当前已有结论文件：{rec.reason.split('/')[-1]}")
+            edit_reason_file = st.file_uploader(f"更新{LABEL_REASON} (PDF)", type=["pdf"], key="admin_edit_reason")
+            
             edit_date_val = rec.punishment_date
             edit_date = st.date_input(LABEL_PUNISHMENT_DATE, value=edit_date_val or datetime.now().date(), key="admin_edit_date")
+            
+            default_dates = []
+            if rec.impact_start_date and rec.impact_end_date:
+                default_dates = [rec.impact_start_date, rec.impact_end_date]
+            elif rec.impact_start_date:
+                default_dates = [rec.impact_start_date]
+                
+            impact_dates_edit = st.date_input("处理起至时间 (可选)", value=default_dates or [], key="admin_edit_impact_dates")
+            edit_impact_start = impact_dates_edit[0] if impact_dates_edit and len(impact_dates_edit) > 0 else None
+            edit_impact_end = impact_dates_edit[1] if impact_dates_edit and len(impact_dates_edit) == 2 else None
+                
             col_save, col_cancel = st.columns(2)
             with col_save:
                 submit_save = st.form_submit_button("保存修改")
             with col_cancel:
                 submit_cancel = st.form_submit_button("取消")
             if submit_save:
-                _try_save_edit_form(edit_db, rec, edit_id, edit_name, edit_major, edit_reason, edit_date)
+                _try_save_edit_form(edit_db, rec, edit_id, edit_name, edit_major, edit_reason_file, edit_date, edit_impact_start, edit_impact_end)
             elif submit_cancel:
                 _clear_edit_id()
                 st.rerun()
@@ -441,8 +448,7 @@ def _render_revoked_restore_expander(db):
 def _render_revoked_section(db):
     st.subheader("已撤销名单")
     st.caption(CAPTION_FILTER_BY_NAME_SID_MAJOR)
-    rn, rs, rm = render_filter_inputs("admin_revoked")
-    page_size, sort_key, sort_asc = render_display_options("admin_revoked")
+    rn, rs, rm, page_size, sort_key, sort_asc = render_list_controls("admin_revoked")
     base = build_blacklist_query(db, status=0, name_filter=rn, sid_filter=rs, major_filter=rm)
     total = base.count()
     if total == 0:
@@ -463,14 +469,16 @@ def _render_revoked_section(db):
 
 
 def _render_management(db):
-    """名单管理：按「录入 → 生效名单 → 已撤销」分 Tab。"""
-    st.caption("录入名单后，在生效/已撤销名单中查看与维护；批量比对请使用教师端。")
-    tab_rec, tab_eff, tab_rev = st.tabs(["录入", "生效名单", "已撤销名单"])
+    """名单管理：按「录入数据 → 修改与删除 → 已撤销名单」分 Tab。"""
+    st.caption("负责名单的新增进件、检索修改及作废恢复工作。浏览生效名单全集请使用左侧的『名单查询』板块。")
+    tab_rec, tab_mod, tab_rev = st.tabs(["录入数据", "修改与删除", "已撤销名单"])
     with tab_rec:
         _render_import_section(db)
         _render_manual_add_section(db)
-    with tab_eff:
-        _render_effective_list_section(db)
+    with tab_mod:
+        _render_modify_delete_section(db)
         _render_edit_form_section()
+        st.divider()
+        _render_effective_init_block(db)
     with tab_rev:
         _render_revoked_section(db)

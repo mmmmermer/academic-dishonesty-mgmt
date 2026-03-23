@@ -25,6 +25,7 @@ else:
 # 向上跳一级：从 core/ 目录到项目根目录
 DATABASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SESSIONS_FILE = os.path.join(DATABASE_DIR, "sessions.json")
+LOGIN_FAILS_FILE = os.path.join(DATABASE_DIR, "login_fails.json")
 
 # 与 config 一致：token 有效时长（秒）
 try:
@@ -132,3 +133,59 @@ def delete_session(token: str):
     if token in sessions:
         del sessions[token]
         _save_sessions(sessions)
+
+
+def delete_sessions_for_user(username: str):
+    """清理指定用户的所有活跃 Session（例如禁用、改密等操作时调用）。"""
+    if not username:
+        return
+    sessions = _load_sessions()
+    valid = {k: v for k, v in sessions.items() if v.get("username") != username}
+    if len(valid) != len(sessions):
+        _save_sessions(valid)
+
+
+# 全局登录失败控制
+def _load_login_fails() -> dict:
+    if not os.path.isfile(LOGIN_FAILS_FILE):
+        return {}
+    try:
+        with open(LOGIN_FAILS_FILE, "r", encoding="utf-8") as f:
+            _lock_shared(f)
+            try:
+                data = json.load(f)
+            finally:
+                _unlock(f)
+            return data
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_login_fails(data: dict):
+    try:
+        with open(LOGIN_FAILS_FILE, "w", encoding="utf-8") as f:
+            _lock_exclusive(f)
+            try:
+                json.dump(data, f, ensure_ascii=False, indent=0)
+            finally:
+                _unlock(f)
+    except OSError:
+        pass
+
+
+def get_login_fails() -> dict:
+    return _load_login_fails()
+
+
+def record_login_fail(username: str):
+    fails = _load_login_fails()
+    count, _ = fails.get(username, (0, 0.0))
+    fails[username] = (count + 1, time.time())
+    _save_login_fails(fails)
+
+
+def clear_login_fail(username: str):
+    fails = _load_login_fails()
+    if username in fails:
+        del fails[username]
+        _save_login_fails(fails)

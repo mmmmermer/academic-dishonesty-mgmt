@@ -36,7 +36,7 @@ from core.config import (
 )
 from core.database import db_session
 from core.models import User
-from core.session_store import create_session
+from core.session_store import create_session, get_login_fails, record_login_fail, clear_login_fail
 from core.utils import log_audit_action
 
 
@@ -68,7 +68,8 @@ def render_login_page():
     if len(username_stripped) > USERNAME_MAX_LEN:
         _show_error(MSG_USERNAME_TOO_LONG)
         return
-    records = st.session_state.get(SESSION_KEY_LOGIN_FAIL_RECORDS) or {}
+    
+    records = get_login_fails()
     if username_stripped in records:
         count, last_ts = records[username_stripped]
         if count >= LOGIN_FAIL_MAX and (time.time() - last_ts) < LOGIN_COOLDOWN_SECONDS:
@@ -80,24 +81,22 @@ def render_login_page():
         try:
             user = db.query(User).filter(User.username == username_stripped).first()
             if not user:
-                _record_login_fail(st.session_state, username_stripped)
+                record_login_fail(username_stripped)
                 logger.info("登录失败 user=%s reason=user_not_found", username_stripped)
                 _show_error(MSG_LOGIN_WRONG)
                 return
             if not user.is_active:
-                _record_login_fail(st.session_state, username_stripped)
+                record_login_fail(username_stripped)
                 logger.info("登录失败 user=%s reason=account_disabled", username_stripped)
                 _show_error(MSG_ACCOUNT_DISABLED)
                 return
             if not verify_password(password, user.password_hash):
-                _record_login_fail(st.session_state, username_stripped)
+                record_login_fail(username_stripped)
                 logger.info("登录失败 user=%s reason=wrong_password", username_stripped)
                 _show_error(MSG_LOGIN_WRONG)
                 return
             # 校验通过：清除该账号失败记录
-            rec = st.session_state.get(SESSION_KEY_LOGIN_FAIL_RECORDS)
-            if rec and username_stripped in rec:
-                del rec[username_stripped]
+            clear_login_fail(username_stripped)
             # 写入会话状态（在 db_session 关闭前读取 user 属性）
             user_id, user_role, user_full_name, user_username = user.id, user.role, user.full_name, user.username
         except Exception:
@@ -119,11 +118,3 @@ def render_login_page():
     st.rerun()
 
 
-def _record_login_fail(session_state, username_stripped: str) -> None:
-    """记录一次登录失败，用于同一账号失败次数与冷却。"""
-    records = session_state.get(SESSION_KEY_LOGIN_FAIL_RECORDS)
-    if records is None:
-        records = {}
-        session_state[SESSION_KEY_LOGIN_FAIL_RECORDS] = records
-    count, _ = records.get(username_stripped, (0, 0.0))
-    records[username_stripped] = (count + 1, time.time())

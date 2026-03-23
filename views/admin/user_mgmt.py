@@ -15,6 +15,7 @@ from core.config import (
     USERNAME_MAX_LEN,
 )
 from core.models import User
+from core.session_store import delete_sessions_for_user
 from core.utils import log_audit_action
 
 
@@ -99,6 +100,7 @@ def _render_reset_password_section(db, users):
         with st.spinner("正在重置..."):
             user.password_hash = bcrypt.hashpw(pwd_stripped.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
             db.commit()
+            delete_sessions_for_user(user.username)
             log_audit_action(AUDIT_ADD, target=f"密码重置 {user.username}", details="")
             st.success(SUCCESS_PWD_RESET)
             st.rerun()
@@ -125,6 +127,8 @@ def _render_toggle_user_section(db, users):
         with st.spinner("正在更新..."):
             target_user.is_active = not target_user.is_active
             db.commit()
+            if not target_user.is_active:
+                delete_sessions_for_user(target_user.username)
             status = "启用" if target_user.is_active else "禁用"
             log_audit_action(AUDIT_ADD, target=f"账号{status} {target_user.username}", details="")
             st.success(f"已{status} {target_user.username}。")

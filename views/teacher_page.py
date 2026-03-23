@@ -29,11 +29,12 @@ from core.config import (
     TITLE_TEACHER,
     TERM_DISHONEST_RECORD,
 )
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, func
 
 from core.database import db_session
 from core.models import AuditLog, Blacklist
-from views.components import render_simple_pagination
+from views.components import render_simple_pagination, render_blacklist_table
+from datetime import datetime
 from core.utils import (
     REQUIRED_EXCEL_COLUMNS,
     cell_str,
@@ -41,6 +42,7 @@ from core.utils import (
     log_audit_action,
     parse_batch_check_excel,
     validate_student_id,
+    sanitize_for_export,
 )
 
 
@@ -93,6 +95,9 @@ def _get_teacher_nav_index():
     return TEACHER_NAV_SINGLE
 
 
+def _on_teacher_nav_change():
+    st.session_state["teacher_nav_loading"] = True
+
 def render_teacher_sidebar_nav():
     """在侧边栏渲染身份标题与三个功能板块导航（由 app 在 with st.sidebar 内调用）。"""
     if TEACHER_NAV_KEY not in st.session_state:
@@ -104,6 +109,7 @@ def render_teacher_sidebar_nav():
         options=TEACHER_NAV_OPTIONS,
         key=TEACHER_NAV_KEY,
         label_visibility="collapsed",
+        on_change=_on_teacher_nav_change
     )
 
 
@@ -112,13 +118,22 @@ def render_teacher_page():
     st.title(TITLE_TEACHER)
     st.caption(CAPTION_TEACHER)
 
+    main_area = st.empty()
+
+    if st.session_state.pop("teacher_nav_loading", False):
+        main_area.info("⏳ 正在为您极速切换板块并提取核心数据，请稍候...", icon="🚀")
+        import time
+        time.sleep(0.05)
+
     nav_index = _get_teacher_nav_index()
-    if nav_index == TEACHER_NAV_SINGLE:
-        _render_single_search()
-    elif nav_index == TEACHER_NAV_BATCH:
-        _render_batch_check()
-    else:
-        _render_my_logs()
+    
+    with main_area.container():
+        if nav_index == TEACHER_NAV_SINGLE:
+            _render_single_search()
+        elif nav_index == TEACHER_NAV_BATCH:
+            _render_batch_check()
+        else:
+            _render_my_logs()
 
 
 def _parse_one_line(line: str):
@@ -148,12 +163,12 @@ def _parse_one_line(line: str):
     return (line, None)
 
 def _render_single_search():
-    """单条查询：支持「姓名 学号」、纯姓名、纯学号；每行一人，可多行查多人。"""
+    """单条查询：支持「姓名 学号/工号」、纯姓名、纯学号/工号；每行一人，可多行查多人。"""
     with st.form("teacher_single_search_form"):
         search_input = st.text_area(
-            "请输入学生姓名或学号",
+            "请输入学生姓名或学号/工号",
             key="teacher_search",
-            placeholder="每行一人，可写「姓名 学号」或仅姓名/仅学号",
+            placeholder="每行一人，可写「姓名 学号/工号」或仅姓名/仅学号/工号",
             height=100,
         )
         search_clicked = st.form_submit_button("查询")
@@ -163,7 +178,7 @@ def _render_single_search():
 
     raw_text = (search_input or "").strip()
     if not raw_text:
-        st.error("请输入姓名或学号后再查询。")
+        st.error("请输入姓名或学号/工号后再查询。")
         return
 
     # 先按换行拆成行（每行一人），逗号、顿号也视为换行
@@ -171,7 +186,7 @@ def _render_single_search():
         raw_text = raw_text.replace(sep, "\n")
     lines = [ln.strip() for ln in raw_text.split("\n") if ln.strip()]
     if not lines:
-        st.error("请输入至少一个姓名或学号。")
+        st.error("请输入至少一个姓名或学号/工号。")
         return
 
     # 解析每行为 (name, id) 或 (name, None) 或 (None, id)
@@ -183,12 +198,12 @@ def _render_single_search():
         if id_part and len(id_part) >= 6:
             ok, err = validate_student_id(id_part)
             if not ok:
-                st.error(err or "学号格式有误，请检查后重试。")
+                st.error(err or "学号/工号格式有误，请检查后重试。")
                 return
         parsed.append((name_part, id_part))
 
     if not parsed:
-        st.error("请输入至少一个有效的姓名或学号。")
+        st.error("请输入至少一个有效的姓名或学号/工号。")
         return
 
     with db_session() as db:
@@ -198,37 +213,32 @@ def _render_single_search():
                 conditions = []
                 for name_part, id_part in parsed:
                     if name_part is not None and id_part is not None:
-                        conditions.append(and_(Blacklist.name == name_part, Blacklist.student_id == id_part))
+                        name_clean = "".join(name_part.split())
+                        conditions.append(and_(func.replace(Blacklist.name, ' ', '') == name_clean, Blacklist.student_id == id_part))
                     elif id_part is not None:
                         conditions.append(Blacklist.student_id == id_part)
                     else:
-                        conditions.append(Blacklist.name == name_part)
+                        name_clean = "".join(name_part.split())
+                        conditions.append(func.replace(Blacklist.name, ' ', '') == name_clean)
                 results = db.query(Blacklist).filter(Blacklist.status == 1, or_(*conditions)).all()
                 seen_sids = set()
-                rows = []
+                unique_records = []
                 for r in results:
                     if r.student_id not in seen_sids:
                         seen_sids.add(r.student_id)
-                        rows.append({
-                            "姓名": r.name,
-                            "学号": r.student_id,
-                            "专业": r.major or "",
-                            "原因": (r.reason or "")[:80],
-                            "处分时间": str(r.punishment_date) if r.punishment_date else "",
-                        })
+                        unique_records.append(r)
         except Exception:
             st.error("查询失败，" + MSG_TRY_AGAIN)
             return
 
-    log_audit_action(AUDIT_QUERY_SINGLE, target="", details=f"查询 {len(parsed)} 人，命中 {len(rows)} 人")
+    log_audit_action(AUDIT_QUERY_SINGLE, target="", details=f"查询 {len(parsed)} 人，命中 {len(unique_records)} 人")
 
-    if not rows:
+    if not unique_records:
         st.success(MSG_NO_RECORD_GOOD)
         return
 
-    st.error(f"共查 {len(parsed)} 人，命中 {len(rows)} 条{TERM_DISHONEST_RECORD}，请核实。")
-    single_table = pd.DataFrame(rows)
-    st.dataframe(single_table, use_container_width=True, hide_index=True)
+    st.error(f"共查 {len(parsed)} 人，命中 {len(unique_records)} 条{TERM_DISHONEST_RECORD}，请核实。")
+    render_blacklist_table(unique_records, page_size=max(1, len(unique_records)), current_page=0)
 
 
 # 教师端批量比对默认每页条数（可选 10/20/50）
@@ -296,13 +306,20 @@ def _render_batch_check():
             upload_rows = [id_to_upload_row[sid] for sid in student_ids]
 
         # 无论是否命中，都写入 session_state，供分页、未命中表与下载使用；无命中时 matched 为空列表
+        today_date = datetime.now().date()
         st.session_state["teacher_batch_matched"] = [
             {
                 "姓名": r.name,
-                "学号": r.student_id,
-                "专业": r.major or "",
-                "原因": r.reason or "",
-                "处分时间": str(r.punishment_date) if r.punishment_date else "",
+                "工号/学号": r.student_id,
+                "所在单位": r.major or "",
+                "认定结论": r.reason if (r.reason and str(r.reason).startswith("/app/static/")) else "",
+                "认定日期": str(r.punishment_date) if r.punishment_date else "",
+                "处理起至时间": f"{r.impact_start_date} 至 {r.impact_end_date}" if r.impact_start_date and r.impact_end_date else (str(r.impact_start_date) if r.impact_start_date else (str(r.impact_end_date) if r.impact_end_date else "")),
+                "影响期": "✅ 是" if (
+                    (r.impact_start_date and r.impact_end_date and r.impact_start_date <= today_date <= r.impact_end_date) or 
+                    (r.impact_start_date and not r.impact_end_date and r.impact_start_date <= today_date) or
+                    (r.impact_end_date and not r.impact_start_date and today_date <= r.impact_end_date)
+                ) else "❌ 否"
             }
             for r in matched
         ]
@@ -347,17 +364,20 @@ def _render_batch_check():
                 st.session_state["teacher_batch_page"] = 0
                 st.rerun()
         st.error(f"{MSG_HAVE_HIT.format(n=total)}（当前第 {current_page + 1}/{total_pages} 页）")
-        batch_table = pd.DataFrame([
-            {
-                "姓名": d["姓名"],
-                "学号": d["学号"],
-                "专业": d["专业"],
-                "原因": (d["原因"] or "")[:80],
-                "处分时间": d["处分时间"],
+        batch_table = pd.DataFrame(page_data)
+        st.dataframe(
+            batch_table, 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "认定结论": st.column_config.LinkColumn(
+                    "认定结论",
+                    display_text="📥 下载公示文件",
+                    help="点击下载/预览官方 PDF 报告"
+                )
             }
-            for d in page_data
-        ])
-        st.dataframe(batch_table, use_container_width=True, hide_index=True)
+        )
+        st.caption("注：表格内『认定结论』为空白代表该人员暂未上传 PDF 公示文件。")
         render_simple_pagination("teacher_batch_page", current_page, total_pages, len(page_data))
 
     # 未命中人员：与命中表相同的列（姓名、学号、专业、原因、处分时间），分页展示
@@ -404,7 +424,7 @@ def _render_batch_check():
     col_d1, col_d2 = st.columns(2)
     with col_d1:
         if total > 0:
-            report_rows = [{**{c: d.get(c, "") for c in REQUIRED_EXCEL_COLUMNS}, "是否命中": "是"} for d in matched_store]
+            report_rows = [{**{c: sanitize_for_export(d.get(c, "")) for c in REQUIRED_EXCEL_COLUMNS}, "是否命中": "是"} for d in matched_store]
             report_df = pd.DataFrame(report_rows, columns=export_columns)
             buf = BytesIO()
             report_df.to_excel(buf, index=False, engine="openpyxl")
@@ -421,7 +441,7 @@ def _render_batch_check():
     with col_d2:
         if not_matched_rows:
             no_hit_df = pd.DataFrame(
-                [{**{c: r.get(c, "") for c in REQUIRED_EXCEL_COLUMNS}, "是否命中": "否"} for r in not_matched_rows],
+                [{**{c: sanitize_for_export(r.get(c, "")) for c in REQUIRED_EXCEL_COLUMNS}, "是否命中": "否"} for r in not_matched_rows],
                 columns=export_columns,
             )
             buf2 = BytesIO()

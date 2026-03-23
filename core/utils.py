@@ -42,9 +42,17 @@ def cell_str(val: Any) -> str:
     return str(val).strip()
 
 
+def sanitize_for_export(val: Any) -> str:
+    """对要导出到 Excel 的文本字段进行防 Formula Injection 处理。"""
+    s = cell_str(val)
+    if s and s[0] in ("=", "+", "-", "@"):
+        return f"'{s}"
+    return s
+
+
 def clean_student_id(text: Any) -> str:
     """
-    清洗学号：去除所有空白、全角数字转半角。
+    清洗学号：去除所有空白、全角数字转半角，并转为大写（忽略大小写差异）。
     """
     if text is None or (isinstance(text, float) and pd.isna(text)):
         return ""
@@ -53,7 +61,7 @@ def clean_student_id(text: Any) -> str:
     s = str(text).strip()
     s = "".join(s.split())
     s = s.translate(FULL_TO_HALF_DIGITS)
-    return s
+    return s.upper()
 
 
 def validate_student_id(raw: Any) -> Tuple[bool, str]:
