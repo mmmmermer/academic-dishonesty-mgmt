@@ -19,6 +19,7 @@ from core.config import (
     CAPTION_FILTER_BY_NAME_SID_MAJOR,
     EMPTY_NO_EFFECTIVE,
     EMPTY_NO_REVOKED,
+    LABEL_CUSTOM_INPUT,
     LABEL_INIT_LIST,
     LABEL_MAJOR,
     LABEL_NAME,
@@ -38,6 +39,7 @@ from core.config import (
     SUCCESS_IMPORT_DONE,
     SUCCESS_INIT_LIST,
     SUCCESS_SAVED,
+    UNIT_INPUT_OPTIONS,
 )
 from core.database import db_session
 from core.models import Blacklist
@@ -250,7 +252,11 @@ def _render_manual_add_section(db):
     with st.form("admin_add_form"):
         add_name = st.text_input(LABEL_NAME, key="add_name")
         add_student_id = st.text_input(LABEL_STUDENT_ID, key="add_student_id")
-        add_major = st.text_input(LABEL_MAJOR, key="add_major")
+        add_major_sel = st.selectbox(LABEL_MAJOR, options=UNIT_INPUT_OPTIONS, key="add_major_sel")
+        if add_major_sel == LABEL_CUSTOM_INPUT:
+            add_major = st.text_input("自定义单位名称", key="add_major_custom")
+        else:
+            add_major = add_major_sel or ""
         add_reason_file = st.file_uploader(f"{LABEL_REASON} (PDF)", type=["pdf"], key="add_reason_file")
         add_date = st.date_input(LABEL_PUNISHMENT_DATE, key="add_date")
         
@@ -385,7 +391,17 @@ def _render_edit_form_section():
             st.caption(f"正在编辑记录 ID：{edit_id}（{LABEL_STUDENT_ID}不可修改）")
             edit_name = st.text_input(LABEL_NAME, value=rec.name, key="admin_edit_name")
             st.text_input(f"{LABEL_STUDENT_ID}（不可修改）", value=rec.student_id, disabled=True, key="admin_edit_sid_display")
-            edit_major = st.text_input(LABEL_MAJOR, value=rec.major or "", key="admin_edit_major")
+            # 智能搜索式选择框：优先从标准院系列表选，也可自定义输入
+            _cur_major = rec.major or ""
+            _default_idx = UNIT_INPUT_OPTIONS.index(_cur_major) if _cur_major in UNIT_INPUT_OPTIONS else 0
+            _major_sel = st.selectbox(LABEL_MAJOR, options=UNIT_INPUT_OPTIONS, index=_default_idx,
+                                      key="admin_edit_major_sel")
+            if _major_sel == LABEL_CUSTOM_INPUT:
+                edit_major = st.text_input("自定义单位名称", value=_cur_major, key="admin_edit_major_custom")
+            elif _major_sel:
+                edit_major = _major_sel
+            else:
+                edit_major = _cur_major
             if rec.reason:
                 st.caption(f"当前已有结论文件：{rec.reason.split('/')[-1]}")
             edit_reason_file = st.file_uploader(f"更新{LABEL_REASON} (PDF)", type=["pdf"], key="admin_edit_reason")
@@ -449,7 +465,7 @@ def _render_revoked_section(db):
     st.subheader("已撤销名单")
     st.caption(CAPTION_FILTER_BY_NAME_SID_MAJOR)
     rn, rs, rm, page_size, sort_key, sort_asc = render_list_controls("admin_revoked")
-    base = build_blacklist_query(db, status=0, name_filter=rn, sid_filter=rs, major_filter=rm)
+    base = build_blacklist_query(db, status=0, name_filter=rn, sid_filter=rs, major_categories=rm)
     total = base.count()
     if total == 0:
         st.caption(EMPTY_NO_REVOKED)

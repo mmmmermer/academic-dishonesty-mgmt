@@ -9,16 +9,20 @@ import pandas as pd
 import streamlit as st
 
 from core.config import (
+    ALL_CATEGORIZED_UNITS,
     LABEL_DISPLAY_OPTIONS_EXPANDER,
     LABEL_PAGE_SIZE,
     LABEL_SORT_COLUMN,
     LABEL_SORT_ORDER,
+    LABEL_UNCATEGORIZED,
     LIST_PAGE_SIZE,
     LIST_PAGE_SIZE_OPTIONS,
     MIME_XLSX,
     PLACEHOLDER_FILTER_EMPTY,
     SORT_ORDER_ASC,
     SORT_ORDER_OPTIONS,
+    UNIT_CATEGORY_MAP,
+    UNIT_FILTER_OPTIONS,
 )
 from core.models import Blacklist
 from core.utils import sanitize_for_export
@@ -31,11 +35,38 @@ def _like_escape(s: str) -> str:
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def build_blacklist_query(db, status: int, name_filter: str = "", sid_filter: str = "", major_filter: str = ""):
-    """构建名单基础查询：支持按空格分隔的多目标检索。"""
-    from sqlalchemy import func, or_
+def _expand_unit_categories(categories: list[str]) -> tuple[list[str], bool]:
+    """将用户选中的分类选项展开为具体院系名列表，并标记是否包含'未归类'。"""
+    units: list[str] = []
+    has_uncategorized = False
+    for item in categories:
+        if item == LABEL_UNCATEGORIZED:
+            has_uncategorized = True
+        elif item.startswith("【全选】"):
+            cat_name = item.replace("【全选】", "")
+            units.extend(UNIT_CATEGORY_MAP.get(cat_name, []))
+        else:
+            units.append(item)
+    return units, has_uncategorized
+
+
+def _unit_like_keyword(unit_name: str) -> str:
+    """从院系全名中提取模糊匹配关键字，兼容历史数据。
+
+    例: '计算机科学与技术学院' -> '计算机科学与技术'
+    """
+    for suffix in ("学院", "学系", "医院", "研究所", "研究院"):
+        if unit_name.endswith(suffix) and len(unit_name) > len(suffix):
+            return unit_name[: -len(suffix)]
+    return unit_name
+
+
+def build_blacklist_query(db, status: int, name_filter: str = "", sid_filter: str = "",
+                         major_categories: list[str] | None = None):
+    """构建名单基础查询：支持多目标检索 + 分类多选筛选单位。"""
+    from sqlalchemy import and_, func, or_
     q = db.query(Blacklist).filter(Blacklist.status == status)
-    
+
     if name_filter:
         names = [n.strip() for n in name_filter.split() if n.strip()]
         if len(names) > 1:
@@ -43,16 +74,37 @@ def build_blacklist_query(db, status: int, name_filter: str = "", sid_filter: st
         else:
             name_clean = "".join(name_filter.split())
             q = q.filter(func.replace(Blacklist.name, ' ', '').like(f"%{_like_escape(name_clean)}%", escape="\\"))
-            
+
     if sid_filter:
         sids = [s.strip() for s in sid_filter.split() if s.strip()]
         if len(sids) > 1:
             q = q.filter(or_(*[Blacklist.student_id.like(f"%{_like_escape(s)}%", escape="\\") for s in sids]))
         else:
             q = q.filter(Blacklist.student_id.like(f"%{_like_escape(sid_filter)}%", escape="\\"))
-            
-    if major_filter:
-        q = q.filter(Blacklist.major.like(f"%{_like_escape(major_filter)}%", escape="\\"))
+
+    if major_categories:
+        units, has_uncategorized = _expand_unit_categories(major_categories)
+        conditions = []
+        # 精确匹配 + 模糊兼容历史数据（去学院/医院等后缀做 LIKE）
+        if units:
+            like_conds = []
+            for u in units:
+                kw = _unit_like_keyword(u)
+                like_conds.append(Blacklist.major.like(f"%{_like_escape(kw)}%", escape="\\"))
+            conditions.append(or_(*like_conds))
+        # 未归类/异常值：major 不含任何已知院系关键字，或为空
+        if has_uncategorized:
+            all_kw_conds = []
+            for known in ALL_CATEGORIZED_UNITS:
+                kw = _unit_like_keyword(known)
+                all_kw_conds.append(Blacklist.major.like(f"%{_like_escape(kw)}%", escape="\\"))
+            conditions.append(or_(
+                Blacklist.major.is_(None),
+                Blacklist.major == "",
+                and_(*[~c for c in all_kw_conds]),
+            ))
+        if conditions:
+            q = q.filter(or_(*conditions))
     return q
 
 
@@ -85,14 +137,50 @@ def render_list_controls(key_prefix: str, sort_columns=None, page_size_options=N
     if order_key not in st.session_state:
         st.session_state[order_key] = SORT_ORDER_ASC
 
-    c1, c2, c3, c4 = st.columns([3, 3, 3, 2.5])
+    # 注入 CSS 魔术：抹除弹窗内 Expander 边框，收紧间距，强制拉宽面板以防折行
+    st.markdown("""
+        <style>
+        /* 强制拉宽悬浮面板，让它在小按钮的基础向右侧展开，释放内部文字空间 */
+        [data-testid="stPopoverBody"] {
+            min-width: 480px !important;
+        }
+        /* 彻底抹除折叠面板的一切残余边框（兼容不同 Streamlit 版本的 details 标签） */
+        [data-testid="stPopoverBody"] details,
+        [data-testid="stPopoverBody"] [data-testid="stExpander"] {
+            border: none !important;
+            box-shadow: none !important;
+            background-color: transparent !important;
+        }
+        [data-testid="stPopoverBody"] details summary,
+        [data-testid="stPopoverBody"] [data-testid="stExpander"] summary {
+            background-color: transparent !important;
+            padding-left: 0 !important;
+            padding-top: 0 !important;
+            padding-bottom: 0 !important;
+        }
+        /* 缩小字体大小，收紧全部行高 */
+        [data-testid="stPopoverBody"] p,
+        [data-testid="stPopoverBody"] div.stMarkdown,
+        [data-testid="stPopoverBody"] details summary p,
+        [data-testid="stPopoverBody"] [data-testid="stExpander"] summary p {
+            font-size: 14px !important;
+        }
+        [data-testid="stPopoverBody"] [data-testid="stVerticalBlock"] {
+            gap: 0.2rem !important; /* 原生默认是1rem，这里大幅减小以拉窄行距 */
+        }
+        [data-testid="stPopoverBody"] label[data-baseweb="checkbox"] {
+            margin-bottom: -4px !important; 
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+    # 基础筛选与设置（第一行）
+    c1, c2, c_settings = st.columns([4, 4, 3])
     with c1:
         fn = st.text_input("姓名筛选", key=f"{key_prefix}_fn", placeholder=PLACEHOLDER_FILTER_EMPTY)
     with c2:
         fs = st.text_input("学号/工号筛选", key=f"{key_prefix}_fs", placeholder=PLACEHOLDER_FILTER_EMPTY)
-    with c3:
-        fm = st.text_input("专业筛选", key=f"{key_prefix}_fm", placeholder=PLACEHOLDER_FILTER_EMPTY)
-    with c4:
+    with c_settings:
         st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
         with st.popover("⚙️ 列表设置", use_container_width=True):
             idx = page_size_options.index(page_size) if page_size in page_size_options else 0
@@ -100,14 +188,61 @@ def render_list_controls(key_prefix: str, sort_columns=None, page_size_options=N
             sort_key = st.selectbox(LABEL_SORT_COLUMN, sort_columns, key=sort_key_k)
             sort_order = st.radio(LABEL_SORT_ORDER, SORT_ORDER_OPTIONS, key=order_key, horizontal=True)
 
+    # 高级单位筛选（第二行，拉长外层选择框，合适尺度）
+    c_unit, _ = st.columns([5.5, 5.5])
+    with c_unit:
+        # 从 Session State 中提取已勾选的数量用于动态折叠按钮标题展示
+        selected_count = 0
+        if st.session_state.get(f"{key_prefix}_chk_u_uncat"):
+            selected_count += 1
+        for cat, units in UNIT_CATEGORY_MAP.items():
+            if st.session_state.get(f"{key_prefix}_chk_cat_{cat}"):
+                selected_count += 1
+            else:
+                for u in units:
+                    if st.session_state.get(f"{key_prefix}_chk_u_{u}"):
+                        selected_count += 1
+                        
+        btn_label = "🏛️ 选择分类或具体院系展开面板 ▾" if selected_count == 0 else f"🏛️ 已勾选 {selected_count} 项分类或院系，点击继续修改 ▾"
+        fm = []
+        
+        st.markdown("<div style='font-size:14px;margin-bottom:6px;opacity:0.8'>单位精准筛选 (点击下方展开面板)</div>", unsafe_allow_html=True)
+        with st.popover(btn_label, use_container_width=True):
+            with st.container(height=320, border=False):
+                # 优先渲染常规类别
+                for cat, units in UNIT_CATEGORY_MAP.items():
+                    # 左右两列排布：左边全选，由于字数变少，给右变释放更多空间（避免展开细选折行）
+                    c_chk, c_exp = st.columns([2.5, 7.5])
+                    
+                    with c_chk:
+                        is_all = st.checkbox(f"**{cat}**", key=f"{key_prefix}_chk_cat_{cat}")
+                        if is_all:
+                            fm.append(f"【全选】{cat}")
+                            
+                    with c_exp:
+                        with st.expander(f"📁 展开细选 ({len(units)}个院系)"):
+                            # 既然右侧面板已分割变窄，内部恢复为单列排列防止院系名称过长被挤折行
+                            for u in units:
+                                if is_all:
+                                    # 父类选中时禁用并强制勾选，添加带此前缀的dummy_key防重复报错
+                                    st.checkbox(u, value=True, disabled=True, key=f"dummy_{key_prefix}_chk_u_{u}")
+                                else:
+                                    if st.checkbox(u, key=f"{key_prefix}_chk_u_{u}"):
+                                        fm.append(u)
+                                        
+                # 异常数据兜底置于最宽面板末端
+                st.markdown("---")
+                if st.checkbox(LABEL_UNCATEGORIZED, key=f"{key_prefix}_chk_u_uncat"):
+                    fm.append(LABEL_UNCATEGORIZED)
+
     sort_asc = sort_order == SORT_ORDER_ASC
     if sort_key not in sort_columns:
         sort_key = "工号/学号"
         
-    return (fn or "").strip(), (fs or "").strip(), (fm or "").strip(), page_size, sort_key, sort_asc
+    return (fn or "").strip(), (fs or "").strip(), fm or [], page_size, sort_key, sort_asc
 
 
-def render_blacklist_table(records, page_size: int, current_page: int, selection_key: str = None) -> list:
+def render_blacklist_table(records, page_size: int, current_page: int, selection_key: str | None = None) -> list:
     """渲染名单表格，支持链接下载与动态时效展示。开启 selection_key 时将带多选框并返回选中的对象。"""
     start = current_page * page_size
     today = datetime.now().date()
@@ -140,7 +275,7 @@ def render_blacklist_table(records, page_size: int, current_page: int, selection
     computed_height = (max(1, len(df)) * 35) + 39
     
     kwargs = {}
-    if selection_key:
+    if selection_key is not None:
         kwargs["on_select"] = "rerun"
         kwargs["selection_mode"] = "multi-row"
         kwargs["key"] = selection_key
@@ -237,7 +372,7 @@ def fetch_export_rows(query, max_rows: int = EXPORT_MAX_ROWS, batch_size: int = 
     return rows
 
 
-def render_blacklist_export_button(db, status: int, fn: str, fs: str, fm: str,
+def render_blacklist_export_button(db, status: int, fn: str, fs: str, fm: list[str],
                                    sort_key: str, sort_asc: bool, total: int,
                                    filename_prefix: str, button_key: str):
     """渲染名单导出 Excel 按钮（分批查询，惰性生成缓存，避免多选刷新时造成灾难性卡顿）。"""
@@ -245,7 +380,7 @@ def render_blacklist_export_button(db, status: int, fn: str, fs: str, fm: str,
         return
         
     # 定义当前查询状态的唯一签名
-    current_hash = f"{status}_{fn}_{fs}_{fm}_{sort_key}_{sort_asc}"
+    current_hash = f"{status}_{fn}_{fs}_{','.join(sorted(fm))}_{sort_key}_{sort_asc}"
     cache_hash_key = f"{button_key}_hash"
     cache_data_key = f"{button_key}_data"
     
@@ -253,7 +388,7 @@ def render_blacklist_export_button(db, status: int, fn: str, fs: str, fm: str,
     if st.session_state.get(cache_hash_key) != current_hash or st.session_state.get(cache_data_key) is None:
         if st.button(f"⚡ 准备打包下载所有筛选记录（共 {total} 条）", use_container_width=True, key=f"{button_key}_prep"):
             with st.spinner(SPINNER_EXPORT):
-                base = build_blacklist_query(db, status, fn, fs, fm)
+                base = build_blacklist_query(db, status, fn, fs, major_categories=fm)
                 ordered = apply_blacklist_sort(base, sort_key, sort_asc)
                 export_rows = fetch_export_rows(ordered)
                 

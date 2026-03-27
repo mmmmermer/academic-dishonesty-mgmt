@@ -136,7 +136,7 @@ SUCCESS_DB_RESTORED = "数据库已恢复，即将刷新页面。"
 # 管理员：名单与操作
 EMPTY_NO_EFFECTIVE = "暂无生效记录。"
 EMPTY_NO_REVOKED = "暂无已撤销记录。"
-CAPTION_FILTER_BY_NAME_SID_MAJOR = "可按姓名、学号、专业筛选（留空表示不限制）。"
+CAPTION_FILTER_BY_NAME_SID_MAJOR = "可按姓名、学号/工号、单位分类筛选（留空表示不限制）。"
 MSG_NOT_FOUND_EFFECTIVE = "未找到该学号的生效记录。"
 MSG_NOT_FOUND_REVOKED = "未找到该学号的已撤销记录。"
 MSG_CONFIRM_INIT_LIST = "确定要初始化名单吗？此操作将把所有生效记录设为已撤销，生效名单将为空。"
@@ -172,3 +172,51 @@ SESSION_KEY_AUTO_BACKUP_DONE = "auto_backup_done"
 # ---------- 日志（阶段四：统一路径，供 app 等使用） ----------
 LOG_SUBDIR = "logs"
 LOG_FILENAME = "app.log"
+
+# ---------- 单位分级分类映射（一级大类 → 二级院系列表） ----------
+UNIT_CATEGORY_MAP = {
+    "工科一": [
+        "电气与电子工程学院", "船舶与海洋工程学院", "建筑与城市规划学院",
+        "土木与水利工程学院", "环境科学与工程学院", "能源与动力工程学院",
+        "材料科学与工程学院", "机械科学与工程学院", "航天航空学院",
+    ],
+    "工科二": [
+        "电子信息与通信学院", "计算机科学与技术学院", "人工智能与自动化学院",
+        "光学与电子信息学院", "软件学院", "网络空间安全学院",
+    ],
+    "理科": [
+        "生命科学与技术学院", "物理学院", "化学与化工学院", "数学与统计学院",
+    ],
+    "文科": [
+        "新闻与信息传播学院", "经济学院", "管理学院", "马克思主义学院",
+        "外国语学院", "社会学院", "人文学院", "哲学学院", "法学院",
+        "教育科学研究院", "公共管理学院", "体育学院", "图书馆",
+    ],
+    "医科": [
+        "公共卫生学院", "药学院", "法医学系", "医药卫生管理学院",
+        "生殖健康研究所", "基础医学院", "护理学院",
+        "协和医院", "同济医院", "梨园医院", "省妇幼",
+    ],
+    "其他": [
+        "网络与计算中心", "武汉市中心医院", "普爱医院",
+        "武汉儿童医院", "第四医院", "武汉市第一医院", "校医院",
+    ],
+}
+
+# 一级分类名列表（供筛选 multiselect 使用的"全选大类"选项）
+UNIT_CATEGORY_OPTIONS = [f"【全选】{k}" for k in UNIT_CATEGORY_MAP]
+
+# 所有二级院系名称的扁平列表（供录入 selectbox 和筛选 multiselect 使用）
+ALL_UNIT_LIST = [unit for units in UNIT_CATEGORY_MAP.values() for unit in units]
+
+# 所有已归类院系名称集合（供"未归类/异常值"反查使用）
+ALL_CATEGORIZED_UNITS = set(ALL_UNIT_LIST)
+
+# 筛选 multiselect 的完整选项列表：大类全选 + 全部二级院系 + 未归类兜底
+LABEL_UNCATEGORIZED = "【未归类/异常值】"
+UNIT_FILTER_OPTIONS = UNIT_CATEGORY_OPTIONS + ALL_UNIT_LIST + [LABEL_UNCATEGORIZED]
+
+# 录入表单 selectbox 的选项列表：空占位 + 全部二级院系 + 自定义输入兜底
+LABEL_CUSTOM_INPUT = "【自定义输入】"
+UNIT_INPUT_OPTIONS = [""] + ALL_UNIT_LIST + [LABEL_CUSTOM_INPUT]
+

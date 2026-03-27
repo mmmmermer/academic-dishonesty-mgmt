@@ -13,9 +13,10 @@ from core.models import Blacklist
 from core.utils import sanitize_for_export, clean_student_id, log_audit_action
 from core.config import (
     CAPTION_FILTER_BY_NAME_SID_MAJOR, EMPTY_NO_EFFECTIVE,
-    MIME_XLSX, LABEL_STUDENT_ID, LABEL_NAME, 
-    LABEL_MAJOR, LABEL_REASON, LABEL_PUNISHMENT_DATE, 
-    MSG_TRY_AGAIN, SUCCESS_SAVED, AUDIT_ADD
+    LABEL_CUSTOM_INPUT, MIME_XLSX, LABEL_STUDENT_ID, LABEL_NAME,
+    LABEL_MAJOR, LABEL_REASON, LABEL_PUNISHMENT_DATE,
+    MSG_TRY_AGAIN, SUCCESS_SAVED, AUDIT_ADD,
+    UNIT_INPUT_OPTIONS,
 )
 from views.components import (
     apply_blacklist_sort,
@@ -150,7 +151,17 @@ def _show_edit_dialog(db, edit_id):
     st.caption(f"正在快捷编辑记录。**{LABEL_STUDENT_ID}** 是核心标识，不可在此修改。")
     edit_name = st.text_input(LABEL_NAME, value=rec.name)
     st.text_input(LABEL_STUDENT_ID, value=rec.student_id, disabled=True)
-    edit_major = st.text_input(LABEL_MAJOR, value=rec.major or "")
+    # 智能搜索式选择框：优先从标准院系列表选，也可自定义输入
+    _cur_major = rec.major or ""
+    _default_idx = UNIT_INPUT_OPTIONS.index(_cur_major) if _cur_major in UNIT_INPUT_OPTIONS else 0
+    _major_sel = st.selectbox(LABEL_MAJOR, options=UNIT_INPUT_OPTIONS, index=_default_idx,
+                              key="dialog_edit_major_sel")
+    if _major_sel == LABEL_CUSTOM_INPUT:
+        edit_major = st.text_input("自定义单位名称", value=_cur_major, key="dialog_edit_major_custom")
+    elif _major_sel:
+        edit_major = _major_sel
+    else:
+        edit_major = _cur_major
     if rec.reason:
         st.caption(f"当前已有文件：{rec.reason.split('/')[-1]}")
     edit_reason_file = st.file_uploader(f"更新{LABEL_REASON} (PDF)", type=["pdf"])
@@ -202,7 +213,7 @@ def _render_list_query(db):
     
     fn, fs, fm, page_size, sort_key, sort_asc = render_list_controls("admin_effective")
     
-    base = build_blacklist_query(db, status=1, name_filter=fn, sid_filter=fs, major_filter=fm)
+    base = build_blacklist_query(db, status=1, name_filter=fn, sid_filter=fs, major_categories=fm)
     total = base.count()
     if total == 0:
         st.caption(EMPTY_NO_EFFECTIVE)
@@ -219,7 +230,7 @@ def _render_list_query(db):
     # cart_clear_nonce 变化时会强制重建表格，使 selected_records 为空，避免清空后被回填
     # 一旦您更改了搜索参数、当前页码、或者是每页显示的数量，这个 Signature 就会随之突变，
     # 迫使 Streamlit 将底层的表格彻底销毁并重生！自然地拔除了跨页/跨环境残留的脏数据打钩状态。
-    state_sig = f"{page}_{page_size}_{fn}_{fs}_{fm}_{sort_key}_{sort_asc}_{st.session_state.get('cart_clear_nonce', 0)}"
+    state_sig = f"{page}_{page_size}_{fn}_{fs}_{','.join(sorted(fm))}_{sort_key}_{sort_asc}_{st.session_state.get('cart_clear_nonce', 0)}"
     current_sel_key = f"admin_query_table_sel_{state_sig}"
     
     # 后渲染：大体量的复选图表被安排在最上方自然伸展
