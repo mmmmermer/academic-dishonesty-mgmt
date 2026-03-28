@@ -9,7 +9,7 @@ db_session() 为上下文管理器，推荐在 with 块内使用；SessionLocal(
 import os
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 # 项目根目录（core 的上一级）
@@ -46,6 +46,14 @@ if IS_SQLITE:
         connect_args={"check_same_thread": False, "timeout": 30},
         echo=False,
     )
+
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragma(dbapi_conn, connection_record):
+        """每次获取新连接时开启 WAL 模式，大幅提升读写并发能力。"""
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA synchronous=NORMAL;")
+        cursor.close()
 else:
     # MySQL/PostgreSQL：连接池 + 健康检查 + 连接回收，适配多请求并发与长时间运行
     engine = create_engine(

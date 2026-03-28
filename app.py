@@ -126,8 +126,13 @@ def _run_auto_backup_once():
         from core.utils import auto_backup
         auto_backup()
         st.session_state[SESSION_KEY_AUTO_BACKUP_DONE] = True
-    except Exception:
-        pass
+        # 清除上次的报错（如果有）
+        st.session_state.pop("auto_backup_error", None)
+    except Exception as e:
+        st.session_state[SESSION_KEY_AUTO_BACKUP_DONE] = True  # 不重试，避免循环崩溃
+        st.session_state["auto_backup_error"] = f"自动备份失败：{e!s}"
+        import logging
+        logging.getLogger(__name__).error("自动备份失败: %s", e)
 
 
 def _init_session_state():

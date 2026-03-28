@@ -83,20 +83,39 @@ def _render_audit_log_display(logs, total_export, db, filter_operator, filter_ty
     )
     st.dataframe(log_df, use_container_width=True, hide_index=True)
     st.caption(f"表格展示 {len(logs)} 条（最多 500 条）；导出为当前筛选结果，共 {total_export} 条（最多导出 {EXPORT_MAX_ROWS} 条）。")
-    with st.spinner(SPINNER_EXPORT):
-        logs_export = _fetch_audit_logs_export_batched(db, filter_operator, filter_type, use_date_filter, filter_date)
-    if not logs_export:
-        return
-    if len(logs_export) >= EXPORT_MAX_ROWS:
-        st.caption(f"筛选结果超过 {EXPORT_MAX_ROWS} 条，仅导出前 {EXPORT_MAX_ROWS} 条。")
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_df_export = pd.DataFrame(
-        [{"ID": r.id, "操作人": r.operator_name, "类型": AUDIT_TYPE_NAMES.get(r.action_type, r.action_type), "对象": r.target or "", "详情": r.details or "", "时间": str(r.timestamp)} for r in logs_export]
-    )
-    xlsx_buf = BytesIO()
-    log_df_export.to_excel(xlsx_buf, index=False, engine="openpyxl")
-    xlsx_buf.seek(0)
-    st.download_button(label="导出审计日志 (Excel)", data=xlsx_buf.getvalue(), file_name=f"审计日志_{stamp}.xlsx", mime=MIME_XLSX, key="audit_export_xlsx")
+
+    # 惰性导出：先显示"准备导出"按钮，点击后查询并缓存，再显示下载按钮
+    current_hash = f"audit_{filter_operator}_{filter_type}_{use_date_filter}_{filter_date}"
+    cache_hash_key = "audit_export_hash"
+    cache_data_key = "audit_export_data"
+
+    if st.session_state.get(cache_hash_key) != current_hash or st.session_state.get(cache_data_key) is None:
+        if st.button(f"⚡ 准备导出审计日志（共 {total_export} 条）", use_container_width=True, key="audit_prep_export"):
+            with st.spinner(SPINNER_EXPORT):
+                logs_export = _fetch_audit_logs_export_batched(db, filter_operator, filter_type, use_date_filter, filter_date)
+            if not logs_export:
+                st.caption("无可导出的日志。")
+                return
+            if len(logs_export) >= EXPORT_MAX_ROWS:
+                st.caption(f"筛选结果超过 {EXPORT_MAX_ROWS} 条，仅导出前 {EXPORT_MAX_ROWS} 条。")
+            log_df_export = pd.DataFrame(
+                [{"ID": r.id, "操作人": r.operator_name, "类型": AUDIT_TYPE_NAMES.get(r.action_type, r.action_type), "对象": r.target or "", "详情": r.details or "", "时间": str(r.timestamp)} for r in logs_export]
+            )
+            xlsx_buf = BytesIO()
+            log_df_export.to_excel(xlsx_buf, index=False, engine="openpyxl")
+            st.session_state[cache_hash_key] = current_hash
+            st.session_state[cache_data_key] = xlsx_buf.getvalue()
+            st.rerun()
+    else:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        st.download_button(
+            label="⬇️ 导出审计日志 (Excel)",
+            data=st.session_state[cache_data_key],
+            file_name=f"审计日志_{stamp}.xlsx",
+            mime=MIME_XLSX,
+            key="audit_export_xlsx",
+            use_container_width=True
+        )
 
 
 def _render_audit_log_section(db):
@@ -180,6 +199,10 @@ def _render_system(db):
     """系统维护：审计日志 + 数据库备份恢复。"""
     _render_audit_log_section(db)
     with st.expander("▶ 数据库备份与恢复", expanded=False):
+        # 自动备份失败告警
+        backup_error = st.session_state.get("auto_backup_error")
+        if backup_error:
+            st.error(f"⚠️ **上次自动备份异常**：{backup_error}。请检查磁盘空间与目录权限。", icon="🚨")
         st.caption("下载当前数据库或上传备份文件覆盖恢复；恢复为危险操作，请谨慎。")
         _render_db_backup_section()
         st.divider()

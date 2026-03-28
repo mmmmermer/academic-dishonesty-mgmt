@@ -257,12 +257,15 @@ def render_blacklist_table(records, page_size: int, current_page: int, selection
         elif r.impact_end_date:
             in_impact = today <= r.impact_end_date
 
+        _reason = str(r.reason) if r.reason else ""
+        _is_pdf = _reason.startswith("/app/static/")
         df_data.append({
             "序号": start + i,
             "姓名": r.name,
             "工号/学号": r.student_id,
             "所在单位": r.major or "",
-            "认定结论": r.reason if (r.reason and str(r.reason).startswith("/app/static/")) else "",
+            "认定结论": _reason if _is_pdf else "",   # PDF 路径，供 LinkColumn 渲染
+            "处理原因": r.reason_text or "",  # 纯文字原因，从此独立字段读取
             "认定日期": str(r.punishment_date) if r.punishment_date else "",
             "处理起至时间": f"{r.impact_start_date} 至 {r.impact_end_date}" if r.impact_start_date and r.impact_end_date else (str(r.impact_start_date) if r.impact_start_date else (str(r.impact_end_date) if r.impact_end_date else "")),
             "影响期": "✅ 是" if in_impact else "❌ 否",
@@ -288,13 +291,17 @@ def render_blacklist_table(records, page_size: int, current_page: int, selection
         column_config={
             "认定结论": st.column_config.LinkColumn(
                 "认定结论",
-                display_text="📥 下载公示文件",
+                display_text="📊 PDF 公示文件",
                 help="点击下载/预览官方 PDF 报告"
-            )
+            ),
+            "处理原因": st.column_config.TextColumn(
+                "处理原因",
+                help="Excel 导入或手动填写的原因文字；已上传 PDF 的记录此列为空"
+            ),
         },
         **kwargs
     )
-    st.caption("注：表格内『认定结论』为空白代表该项暂未上传 PDF 格式的公示文件。")
+    st.caption("注：『认定结论』列有链接代表已上传 PDF 公示文件；『处理原因』列显示文字说明（未上传 PDF 时）。")
     
     if selection_key and hasattr(event, "selection") and hasattr(event.selection, "rows"):
         selected_indices = event.selection.rows

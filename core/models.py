@@ -42,6 +42,7 @@ class Blacklist(Base):
     student_id = Column("id_card", String(32), nullable=False, unique=True, comment="学号(唯一)")
     major = Column(String(128), nullable=True, comment="所学专业")
     reason = Column(Text, nullable=True, comment="认定结论(PDF路径或外部链接)")
+    reason_text = Column(String(512), nullable=True, comment="处理原因(纯文本)")
     punishment_date = Column(Date, nullable=True, comment="认定日期")
     impact_start_date = Column(Date, nullable=True, comment="处理起时间")
     impact_end_date = Column(Date, nullable=True, comment="处理止时间")

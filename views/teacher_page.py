@@ -312,7 +312,8 @@ def _render_batch_check():
                 "姓名": r.name,
                 "工号/学号": r.student_id,
                 "所在单位": r.major or "",
-                "认定结论": r.reason if (r.reason and str(r.reason).startswith("/app/static/")) else "",
+                "认定结论": (str(r.reason) if r.reason and str(r.reason).startswith("/app/static/") else ""),
+                "处理原因": (r.reason_text or ""),
                 "认定日期": str(r.punishment_date) if r.punishment_date else "",
                 "处理起至时间": f"{r.impact_start_date} 至 {r.impact_end_date}" if r.impact_start_date and r.impact_end_date else (str(r.impact_start_date) if r.impact_start_date else (str(r.impact_end_date) if r.impact_end_date else "")),
                 "影响期": "✅ 是" if (

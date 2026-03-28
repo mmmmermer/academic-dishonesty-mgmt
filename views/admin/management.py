@@ -49,6 +49,8 @@ from core.utils import (
     clean_student_id,
     log_audit_action,
     parse_blacklist_excel,
+    remove_old_pdf,
+    safe_filename,
     validate_student_id,
 )
 from views.components import (
@@ -108,24 +110,47 @@ def _parse_import_row(row):
             punishment_date = pd.to_datetime(raw_date).date()
         except Exception:
             pass
-    return sid, name, major, reason, punishment_date
+    # 可选列：影响开始日期 / 影响结束日期
+    impact_start = None
+    raw_start = row.get("影响开始日期")
+    if raw_start is not None and pd.notna(raw_start):
+        try:
+            impact_start = pd.to_datetime(raw_start).date()
+        except Exception:
+            pass
+    impact_end = None
+    raw_end = row.get("影响结束日期")
+    if raw_end is not None and pd.notna(raw_end):
+        try:
+            impact_end = pd.to_datetime(raw_end).date()
+        except Exception:
+            pass
+    return sid, name, major, reason, punishment_date, impact_start, impact_end
 
 
 def _build_skipped_row(row, idx):
     return {"行号": idx + 2, **{c: cell_str(row.get(c)) for c in REQUIRED_EXCEL_COLUMNS}}
 
 
-def _upsert_one_blacklist(db, sid, name, major, reason, punishment_date):
+def _upsert_one_blacklist(db, sid, name, major, reason_text, punishment_date, impact_start=None, impact_end=None):
     existing = db.query(Blacklist).filter(Blacklist.student_id == sid).first()
     if existing:
         existing.name = name or existing.name
         existing.major = major if major else existing.major
-        existing.reason = reason if reason else existing.reason
+        existing.reason_text = reason_text if reason_text else existing.reason_text
         if punishment_date:
             existing.punishment_date = punishment_date
+        if impact_start is not None:
+            existing.impact_start_date = impact_start
+        if impact_end is not None:
+            existing.impact_end_date = impact_end
         existing.status = 1
         return "updated"
-    rec = Blacklist(name=name, student_id=sid, major=major or None, reason=reason or None, punishment_date=punishment_date, status=1)
+    rec = Blacklist(
+        name=name, student_id=sid, major=major or None, reason_text=reason_text or None,
+        punishment_date=punishment_date, status=1,
+        impact_start_date=impact_start, impact_end_date=impact_end,
+    )
     db.add(rec)
     return "imported"
 
@@ -140,8 +165,8 @@ def _run_batch_import(db, df, filename):
                 skipped += 1
                 skipped_rows.append(_build_skipped_row(row, idx))
                 continue
-            sid, name, major, reason, punishment_date = parsed
-            action = _upsert_one_blacklist(db, sid, name, major, reason, punishment_date)
+            sid, name, major, reason_text, punishment_date, impact_start, impact_end = parsed
+            action = _upsert_one_blacklist(db, sid, name, major, reason_text, punishment_date, impact_start, impact_end)
             if action == "imported":
                 imported += 1
             else:
@@ -203,7 +228,7 @@ def _render_import_section(db):
 # ── 手动新增 ──────────────────────────────────────────────
 
 
-def _try_manual_add(db, add_name, add_student_id, add_major, add_reason_file, add_date, add_impact_start, add_impact_end):
+def _try_manual_add(db, add_name, add_student_id, add_major, add_reason_text, add_reason_file, add_date, add_impact_start, add_impact_end):
     if not add_name or not add_student_id:
         st.error(f"请填写{LABEL_NAME}和{LABEL_STUDENT_ID}。")
         return False
@@ -215,7 +240,7 @@ def _try_manual_add(db, add_name, add_student_id, add_major, add_reason_file, ad
     pdf_path = None
     if add_reason_file is not None:
         os.makedirs(os.path.join("static", "pdfs"), exist_ok=True)
-        filename = f"{clean_student_id(add_student_id)}_{int(time.time())}.pdf"
+        filename = f"{safe_filename(add_student_id)}_{int(time.time())}.pdf"
         file_path = os.path.join("static", "pdfs", filename)
         with open(file_path, "wb") as f:
             f.write(add_reason_file.getvalue())
@@ -230,6 +255,7 @@ def _try_manual_add(db, add_name, add_student_id, add_major, add_reason_file, ad
             rec = Blacklist(
                 name=add_name.strip(), student_id=sid_clean,
                 major=add_major.strip() or None, reason=pdf_path,
+                reason_text=(add_reason_text.strip() if add_reason_text else None),
                 punishment_date=add_date, 
                 impact_start_date=add_impact_start,
                 impact_end_date=add_impact_end,
@@ -257,14 +283,15 @@ def _render_manual_add_section(db):
             add_major = st.text_input("自定义单位名称", key="add_major_custom")
         else:
             add_major = add_major_sel or ""
-        add_reason_file = st.file_uploader(f"{LABEL_REASON} (PDF)", type=["pdf"], key="add_reason_file")
+        add_reason_text = st.text_input("处理原因(文字)", key="add_reason_text_input")
+        add_reason_file = st.file_uploader(f"认定结论 (PDF)", type=["pdf"], key="add_reason_file")
         add_date = st.date_input(LABEL_PUNISHMENT_DATE, key="add_date")
         
         impact_dates = st.date_input("处理起至时间 (可选)", value=[], key="add_impact_dates")
         add_impact_start = impact_dates[0] if impact_dates and len(impact_dates) > 0 else None
         add_impact_end = impact_dates[1] if impact_dates and len(impact_dates) == 2 else None
             
-        if st.form_submit_button("添加") and _try_manual_add(db, add_name, add_student_id, add_major, add_reason_file, add_date, add_impact_start, add_impact_end):
+        if st.form_submit_button("添加") and _try_manual_add(db, add_name, add_student_id, add_major, add_reason_text, add_reason_file, add_date, add_impact_start, add_impact_end):
             st.rerun()
 
 
@@ -349,18 +376,24 @@ def _clear_edit_id():
         del st.session_state["admin_edit_id"]
 
 
-def _try_save_edit_form(edit_db, rec, edit_id, edit_name, edit_major, edit_reason_file, edit_date, edit_impact_start, edit_impact_end):
+def _try_save_edit_form(edit_db, rec, edit_id, edit_name, edit_major, edit_reason_text, edit_reason_file, edit_date, edit_impact_start, edit_impact_end):
     try:
         rec.name = (edit_name or "").strip() or rec.name
         rec.major = (edit_major or "").strip() or None
+        if edit_reason_text is not None:
+            rec.reason_text = edit_reason_text.strip() or None
         
         if edit_reason_file is not None:
+            # 清理旧 PDF（若存在），避免磁盘累积孤儿文件
+            old_reason_path = rec.reason
             os.makedirs(os.path.join("static", "pdfs"), exist_ok=True)
-            filename = f"{clean_student_id(rec.student_id)}_{int(time.time())}.pdf"
+            filename = f"{safe_filename(rec.student_id)}_{int(time.time())}.pdf"
             file_path = os.path.join("static", "pdfs", filename)
             with open(file_path, "wb") as f:
                 f.write(edit_reason_file.getvalue())
             rec.reason = f"/app/static/pdfs/{filename}"
+            # commit 成功后再删旧文件（见下方 commit 后的调用）
+            remove_old_pdf(old_reason_path)
             
         rec.punishment_date = edit_date
         rec.impact_start_date = edit_impact_start
@@ -402,9 +435,10 @@ def _render_edit_form_section():
                 edit_major = _major_sel
             else:
                 edit_major = _cur_major
+            edit_reason_text = st.text_input("处理原因(文字)", value=(rec.reason_text or ""), key="admin_edit_reason_text")
             if rec.reason:
                 st.caption(f"当前已有结论文件：{rec.reason.split('/')[-1]}")
-            edit_reason_file = st.file_uploader(f"更新{LABEL_REASON} (PDF)", type=["pdf"], key="admin_edit_reason")
+            edit_reason_file = st.file_uploader(f"更新认定结论 (PDF)", type=["pdf"], key="admin_edit_reason_file")
             
             edit_date_val = rec.punishment_date
             edit_date = st.date_input(LABEL_PUNISHMENT_DATE, value=edit_date_val or datetime.now().date(), key="admin_edit_date")
@@ -425,7 +459,7 @@ def _render_edit_form_section():
             with col_cancel:
                 submit_cancel = st.form_submit_button("取消")
             if submit_save:
-                _try_save_edit_form(edit_db, rec, edit_id, edit_name, edit_major, edit_reason_file, edit_date, edit_impact_start, edit_impact_end)
+                _try_save_edit_form(edit_db, rec, edit_id, edit_name, edit_major, edit_reason_text, edit_reason_file, edit_date, edit_impact_start, edit_impact_end)
             elif submit_cancel:
                 _clear_edit_id()
                 st.rerun()
@@ -489,8 +523,8 @@ def _render_management(db):
     st.caption("负责名单的新增进件、检索修改及作废恢复工作。浏览生效名单全集请使用左侧的『名单查询』板块。")
     tab_rec, tab_mod, tab_rev = st.tabs(["录入数据", "修改与删除", "已撤销名单"])
     with tab_rec:
-        _render_import_section(db)
         _render_manual_add_section(db)
+        _render_import_section(db)
     with tab_mod:
         _render_modify_delete_section(db)
         _render_edit_form_section()
