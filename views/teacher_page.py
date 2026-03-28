@@ -19,6 +19,7 @@ from core.config import (
     LABEL_BATCH_PAGE_OPTIONS,
     LABEL_PAGE_SIZE,
     LABEL_SELECT_FEATURE,
+    LABEL_STUDENT_ID,
     LIST_PAGE_SIZE_OPTIONS,
     MIME_XLSX,
     MSG_HAVE_HIT,
@@ -163,12 +164,12 @@ def _parse_one_line(line: str):
     return (line, None)
 
 def _render_single_search():
-    """单条查询：支持「姓名 学号/工号」、纯姓名、纯学号/工号；每行一人，可多行查多人。"""
+    """单条查询：支持「姓名 工号/学号」、纯姓名、纯工号/学号；每行一人，可多行查多人。"""
     with st.form("teacher_single_search_form"):
         search_input = st.text_area(
-            "请输入学生姓名或学号/工号",
+            f"请输入姓名或{LABEL_STUDENT_ID}",
             key="teacher_search",
-            placeholder="每行一人，可写「姓名 学号/工号」或仅姓名/仅学号/工号",
+            placeholder=f"每行一人，可写「姓名 {LABEL_STUDENT_ID}」或仅姓名/仅{LABEL_STUDENT_ID}",
             height=100,
         )
         search_clicked = st.form_submit_button("查询")
@@ -178,7 +179,7 @@ def _render_single_search():
 
     raw_text = (search_input or "").strip()
     if not raw_text:
-        st.error("请输入姓名或学号/工号后再查询。")
+        st.error(f"请输入姓名或{LABEL_STUDENT_ID}后再查询。")
         return
 
     # 先按换行拆成行（每行一人），逗号、顿号也视为换行
@@ -186,7 +187,7 @@ def _render_single_search():
         raw_text = raw_text.replace(sep, "\n")
     lines = [ln.strip() for ln in raw_text.split("\n") if ln.strip()]
     if not lines:
-        st.error("请输入至少一个姓名或学号/工号。")
+        st.error(f"请输入至少一个姓名或{LABEL_STUDENT_ID}。")
         return
 
     # 解析每行为 (name, id) 或 (name, None) 或 (None, id)
@@ -198,12 +199,12 @@ def _render_single_search():
         if id_part and len(id_part) >= 6:
             ok, err = validate_student_id(id_part)
             if not ok:
-                st.error(err or "学号/工号格式有误，请检查后重试。")
+                st.error(err or f"{LABEL_STUDENT_ID}格式有误，请检查后重试。")
                 return
         parsed.append((name_part, id_part))
 
     if not parsed:
-        st.error("请输入至少一个有效的姓名或学号/工号。")
+        st.error(f"请输入至少一个有效的姓名或{LABEL_STUDENT_ID}。")
         return
 
     with db_session() as db:
@@ -262,7 +263,7 @@ def _render_batch_check():
             return
 
         if df.empty:
-            st.warning("Excel 中未找到有效的学号。")
+            st.warning(f"Excel 中未找到有效的{LABEL_STUDENT_ID}。")
             return
 
         student_ids = df["学号"].dropna().astype(str).unique().tolist()
@@ -310,9 +311,9 @@ def _render_batch_check():
         st.session_state["teacher_batch_matched"] = [
             {
                 "姓名": r.name,
-                "工号/学号": r.student_id,
+                "学号": r.student_id,
                 "所在单位": r.major or "",
-                "认定结论": (str(r.reason) if r.reason and str(r.reason).startswith("/app/static/") else ""),
+                "认定结论": (str(r.reason) if r.reason and str(r.reason).endswith(".pdf") else ""),
                 "处理原因": (r.reason_text or ""),
                 "认定日期": str(r.punishment_date) if r.punishment_date else "",
                 "处理起至时间": f"{r.impact_start_date} 至 {r.impact_end_date}" if r.impact_start_date and r.impact_end_date else (str(r.impact_start_date) if r.impact_start_date else (str(r.impact_end_date) if r.impact_end_date else "")),
@@ -336,7 +337,7 @@ def _render_batch_check():
     matched_store = st.session_state["teacher_batch_matched"]
     total = len(matched_store)
     upload_count = st.session_state.get("teacher_batch_upload_count", total)
-    upload_ids = st.session_state.get("teacher_batch_upload_ids", [d["学号"] for d in matched_store])
+    upload_ids = st.session_state.get("teacher_batch_upload_ids", [d.get("学号", "") for d in matched_store])
 
     page_size_t = st.session_state.get("teacher_batch_page_size", TEACHER_BATCH_PAGE_SIZE_DEFAULT)
     if page_size_t not in TEACHER_BATCH_PAGE_OPTIONS:
@@ -371,6 +372,9 @@ def _render_batch_check():
             use_container_width=True, 
             hide_index=True,
             column_config={
+                "学号": st.column_config.TextColumn(
+                    LABEL_STUDENT_ID,
+                ),
                 "认定结论": st.column_config.LinkColumn(
                     "认定结论",
                     display_text="📥 下载公示文件",

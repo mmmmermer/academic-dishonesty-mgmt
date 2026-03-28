@@ -258,7 +258,7 @@ def render_blacklist_table(records, page_size: int, current_page: int, selection
             in_impact = today <= r.impact_end_date
 
         _reason = str(r.reason) if r.reason else ""
-        _is_pdf = _reason.startswith("/app/static/")
+        _is_pdf = _reason.lower().endswith(".pdf")
         df_data.append({
             "序号": start + i,
             "姓名": r.name,

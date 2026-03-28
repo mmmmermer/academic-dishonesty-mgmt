@@ -2,10 +2,11 @@
 工具模块：学号处理、Excel 解析、备份逻辑、审计日志写入
 """
 import os
+import re
 import shutil
 from datetime import datetime
 from io import BytesIO
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
 
 import pandas as pd  # type: ignore[reportMissingImports]
 import streamlit as st
@@ -14,13 +15,14 @@ from .database import DATABASE_DIR, IS_SQLITE, db_session
 from .models import AuditLog
 
 try:
-    from .config import MAX_IMPORT_ROWS, MAX_UPLOAD_FILE_BYTES, SESSION_KEY_USER_NAME, STUDENT_ID_MAX_LEN, STUDENT_ID_MIN_LEN
+    from .config import MAX_IMPORT_ROWS, MAX_UPLOAD_FILE_BYTES, SESSION_KEY_USER_NAME, STUDENT_ID_MAX_LEN, STUDENT_ID_MIN_LEN, LABEL_STUDENT_ID
 except ImportError:
     STUDENT_ID_MIN_LEN = 1
     STUDENT_ID_MAX_LEN = 32
     MAX_IMPORT_ROWS = 10000
     MAX_UPLOAD_FILE_BYTES = 10 * 1024 * 1024
     SESSION_KEY_USER_NAME = "user_name"
+    LABEL_STUDENT_ID = "工号/学号"
 
 # 数据库文件路径
 DATABASE_PATH = os.path.join(DATABASE_DIR, "database.db")
@@ -81,7 +83,7 @@ _logger = _logging.getLogger(__name__)
 _PDF_DIR = os.path.join(DATABASE_DIR, "static", "pdfs")
 
 
-def remove_old_pdf(reason_field: str | None) -> None:
+def remove_old_pdf(reason_field: Optional[str]) -> None:
     """
     安全删除旧的 PDF 文件。
     reason_field 值形如 '/app/static/pdfs/xxx.pdf'，需要转换为本地路径后删除。
@@ -142,6 +144,64 @@ def _check_file_size(uploaded_file: Any):
         raise ValueError(f"上传文件过大（{size / (1024 * 1024):.1f} MB），单次最大 {limit_mb:.0f} MB，请精简后重试。")
 
 
+def _read_excel_bytes(uploaded_file: Any) -> BytesIO:
+    """统一将上传文件转为 BytesIO，供 pandas 读取。"""
+    if hasattr(uploaded_file, "read"):
+        raw = uploaded_file.read()
+        if isinstance(raw, str):
+            raw = raw.encode("utf-8")
+        return BytesIO(raw)
+    return uploaded_file
+
+
+# ---------- 智能表头/列侦测工具 ----------
+
+# 已知的学号列名变体（覆盖高校教务系统常见导出格式）
+_ID_COLUMN_ALIASES = {"学号", "工号", "工号/学号", "编号", "考号", "考生号", "准考证号", "证件号", "ID", "id", "学工号"}
+
+# 学号特征正则：6~32 位纯数字或字母数字混合串
+_RE_LOOKS_LIKE_ID = re.compile(r"^\s*[A-Za-z0-9]{6,32}\s*$")
+
+
+def _detect_id_column_index(df_raw: pd.DataFrame) -> Optional[int]:
+    """
+    在无表头（header=None）的 DataFrame 中，通过数据特征推断哪一列最可能是学号列。
+    策略：取前 5 行样本，对每一列统计"看起来像学号"的比例，取最高者。
+    仅当匹配率 >= 60% 时才认定，避免误判。
+    返回列索引（int），无法判定时返回 None。
+    """
+    if df_raw.empty:
+        return None
+    sample = df_raw.head(min(5, len(df_raw)))
+    best_col = None
+    best_rate = 0.0
+    for col_idx in range(len(df_raw.columns)):
+        col_data = sample.iloc[:, col_idx].astype(str)
+        match_count = sum(1 for v in col_data if _RE_LOOKS_LIKE_ID.match(v))
+        rate = match_count / len(col_data)
+        if rate > best_rate:
+            best_rate = rate
+            best_col = col_idx
+    if best_rate >= 0.6 and best_col is not None:
+        return best_col
+    return None
+
+
+def _try_find_header_row(df_raw: pd.DataFrame) -> Optional[int]:
+    """
+    在无表头的 DataFrame 前 3 行中查找是否存在已知的列名关键字（如"学号""工号"等）。
+    若找到，返回该行的行号索引；否则返回 None。
+    """
+    scan_rows = min(3, len(df_raw))
+    for row_idx in range(scan_rows):
+        row_values = {str(v).strip() for v in df_raw.iloc[row_idx]}
+        if row_values & _ID_COLUMN_ALIASES:
+            return row_idx
+    return None
+
+
+# ---------- 黑名单导入解析 ----------
+
 def parse_blacklist_excel(uploaded_file: Any) -> pd.DataFrame:
     """
     解析黑名单 Excel：校验必需列、清洗学号后返回 DataFrame。
@@ -153,13 +213,7 @@ def parse_blacklist_excel(uploaded_file: Any) -> pd.DataFrame:
     """
     _check_file_size(uploaded_file)
     try:
-        if hasattr(uploaded_file, "read"):
-            raw = uploaded_file.read()
-            if isinstance(raw, str):
-                raw = raw.encode("utf-8")
-            io = BytesIO(raw)
-        else:
-            io = uploaded_file
+        io = _read_excel_bytes(uploaded_file)
         engine = _get_excel_engine(uploaded_file)
         df = pd.read_excel(io, engine=engine)
     except Exception as e:
@@ -175,31 +229,98 @@ def parse_blacklist_excel(uploaded_file: Any) -> pd.DataFrame:
     return df
 
 
+# ---------- 批量比对解析（智能启发式侦测） ----------
+
 # 批量比对用 Excel 至少需要一列学号
 BATCH_CHECK_ID_COLUMN = "学号"
 
 
 def parse_batch_check_excel(uploaded_file: Any) -> pd.DataFrame:
     """
-    解析批量比对用 Excel：至少包含「学号」列，清洗后返回。
-    可选列：姓名（用于报告显示）。
+    解析批量比对用 Excel，支持三级智能侦测：
+      1. 标准模式：第一行为表头，直接定位"学号"列。
+      2. 表头偏移：前 3 行中隐含已知列名关键字（学号/工号/编号等），自动识别。
+      3. 盲推断：无任何表头时，通过正则特征扫描自动识别最像学号的列。
     """
     _check_file_size(uploaded_file)
     try:
-        if hasattr(uploaded_file, "read"):
-            raw = uploaded_file.read()
-            if isinstance(raw, str):
-                raw = raw.encode("utf-8")
-            io = BytesIO(raw)
-        else:
-            io = uploaded_file
+        io = _read_excel_bytes(uploaded_file)
         engine = _get_excel_engine(uploaded_file)
+        # 第一序列：标准读取（pandas 默认将第一行作为表头）
         df = pd.read_excel(io, engine=engine)
     except Exception as e:
         raise ValueError(f"无法读取 Excel 文件，请确认格式为 .xlsx 或 .xls。错误信息：{e!s}") from e
 
+    # 标准模式命中：列名中直接包含已知别名
+    matched_col = None
+    for alias in _ID_COLUMN_ALIASES:
+        if alias in df.columns:
+            matched_col = alias
+            break
+
+    if matched_col is not None:
+        # 直接命中标准表头
+        if matched_col != BATCH_CHECK_ID_COLUMN:
+            df = df.rename(columns={matched_col: BATCH_CHECK_ID_COLUMN})
+    else:
+        # 未命中标准表头 → 回退为无表头盲读
+        _logger.info("批量比对：标准表头未命中，启动智能侦测...")
+        try:
+            io.seek(0)
+            df_raw = pd.read_excel(io, engine=engine, header=None)
+        except Exception as e:
+            raise ValueError(f"无法读取 Excel 文件：{e!s}") from e
+
+        # 第二序列：在前 3 行搜索已知列名关键字
+        header_row = _try_find_header_row(df_raw)
+        if header_row is not None:
+            # 找到了隐藏的表头行，将其晋升为表头
+            new_headers = [str(v).strip() for v in df_raw.iloc[header_row]]
+            df = df_raw.iloc[header_row + 1:].reset_index(drop=True)
+            df.columns = new_headers
+            # 再次查找匹配的列名
+            for alias in _ID_COLUMN_ALIASES:
+                if alias in df.columns:
+                    if alias != BATCH_CHECK_ID_COLUMN:
+                        df = df.rename(columns={alias: BATCH_CHECK_ID_COLUMN})
+                    break
+            else:
+                raise ValueError(
+                    f"表格检测到表头行，但仍未找到{LABEL_STUDENT_ID}列。"
+                    f"请确保表头包含以下任一列名：{', '.join(sorted(_ID_COLUMN_ALIASES))}。"
+                )
+        else:
+            # 第三序列：盲推断，通过数据特征识别学号列
+            id_col_idx = _detect_id_column_index(df_raw)
+            if id_col_idx is not None:
+                _logger.info("批量比对：盲推断命中第 %d 列为学号列", id_col_idx)
+                # 将盲读的 DataFrame 重新命名，学号列命名为标准列名
+                df = df_raw.copy()
+                col_names = []
+                # 尝试基于 REQUIRED_EXCEL_COLUMNS 和学号列的相对位置来猜测周围列的含义
+                id_idx_in_req = REQUIRED_EXCEL_COLUMNS.index(BATCH_CHECK_ID_COLUMN) if BATCH_CHECK_ID_COLUMN in REQUIRED_EXCEL_COLUMNS else 1
+                for i in range(len(df.columns)):
+                    if i == id_col_idx:
+                        col_names.append(BATCH_CHECK_ID_COLUMN)
+                    else:
+                        req_idx = id_idx_in_req + (i - id_col_idx)
+                        if 0 <= req_idx < len(REQUIRED_EXCEL_COLUMNS):
+                            col_names.append(REQUIRED_EXCEL_COLUMNS[req_idx])
+                        else:
+                            col_names.append(f"未知列_{i + 1}")
+                df.columns = col_names
+            else:
+                raise ValueError(
+                    f"未能在表格中识别出{LABEL_STUDENT_ID}列。\n"
+                    f"请确保表格第一行为表头（包含「{LABEL_STUDENT_ID}」），"
+                    f"或数据中至少有一列为 6 位以上的数字编号。"
+                )
+
+    # 统一校验与清洗
     if BATCH_CHECK_ID_COLUMN not in df.columns:
-        raise ValueError("缺少「学号」列。请确保表格至少包含一列：学号。")
+        raise ValueError(
+            f"缺少「{LABEL_STUDENT_ID}」列。请确保表格至少包含一列：{LABEL_STUDENT_ID}。"
+        )
     if len(df) > MAX_IMPORT_ROWS:
         raise ValueError(f"批量比对单次不得超过 {MAX_IMPORT_ROWS} 行，请分批上传。")
 
