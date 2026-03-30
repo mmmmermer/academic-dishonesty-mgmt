@@ -204,17 +204,10 @@ def _show_edit_dialog(db, edit_id):
     st.caption(f"正在快捷编辑记录。**{LABEL_STUDENT_ID}** 是核心标识，不可在此修改。")
     edit_name = st.text_input(LABEL_NAME, value=rec.name)
     st.text_input(LABEL_STUDENT_ID, value=rec.student_id, disabled=True)
-    # 智能搜索式选择框：优先从标准院系列表选，也可自定义输入
+    # 调用与名单查询和手动新增一致的「大小分类」级联选择器
     _cur_major = rec.major or ""
-    _default_idx = UNIT_INPUT_OPTIONS.index(_cur_major) if _cur_major in UNIT_INPUT_OPTIONS else 0
-    _major_sel = st.selectbox(LABEL_MAJOR, options=UNIT_INPUT_OPTIONS, index=_default_idx,
-                              key="dialog_edit_major_sel")
-    if _major_sel == LABEL_CUSTOM_INPUT:
-        edit_major = st.text_input("自定义单位名称", value=_cur_major, key="dialog_edit_major_custom")
-    elif _major_sel:
-        edit_major = _major_sel
-    else:
-        edit_major = _cur_major
+    from views.components import render_single_unit_selector
+    edit_major = render_single_unit_selector("dialog_edit_major", default_val=_cur_major)
     edit_reason_text = st.text_input("处理原因(文字)", value=(rec.reason_text or ""))
     if rec.reason:
         st.caption(f"当前已有文件：{rec.reason.split('/')[-1]}")

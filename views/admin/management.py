@@ -39,7 +39,6 @@ from core.config import (
     SUCCESS_IMPORT_DONE,
     SUCCESS_INIT_LIST,
     SUCCESS_SAVED,
-    UNIT_INPUT_OPTIONS,
 )
 from core.database import db_session
 from core.models import Blacklist
@@ -273,26 +272,25 @@ def _try_manual_add(db, add_name, add_student_id, add_major, add_reason_text, ad
 
 
 def _render_manual_add_section(db):
-    st.divider()
     st.subheader("手动新增")
-    with st.form("admin_add_form"):
-        add_name = st.text_input(LABEL_NAME, key="add_name")
-        add_student_id = st.text_input(LABEL_STUDENT_ID, key="add_student_id")
-        add_major_sel = st.selectbox(LABEL_MAJOR, options=UNIT_INPUT_OPTIONS, key="add_major_sel")
-        if add_major_sel == LABEL_CUSTOM_INPUT:
-            add_major = st.text_input("自定义单位名称", key="add_major_custom")
-        else:
-            add_major = add_major_sel or ""
-        add_reason_text = st.text_input("处理原因(文字)", key="add_reason_text_input")
-        add_reason_file = st.file_uploader(f"认定结论 (PDF)", type=["pdf"], key="add_reason_file")
-        add_date = st.date_input(LABEL_PUNISHMENT_DATE, key="add_date")
+    add_name = st.text_input(LABEL_NAME, key="add_name")
+    add_student_id = st.text_input(LABEL_STUDENT_ID, key="add_student_id")
+    
+    from views.components import render_single_unit_selector
+    add_major = render_single_unit_selector("add_major")
+    
+    add_reason_text = st.text_input("处理原因(文字)", key="add_reason_text_input")
+    add_reason_file = st.file_uploader(f"认定结论 (PDF)", type=["pdf"], key="add_reason_file")
+    add_date = st.date_input(LABEL_PUNISHMENT_DATE, key="add_date")
+    
+    impact_dates = st.date_input("处理起至时间 (可选)", value=[], key="add_impact_dates")
+    add_impact_start = impact_dates[0] if impact_dates and len(impact_dates) > 0 else None
+    add_impact_end = impact_dates[1] if impact_dates and len(impact_dates) == 2 else None
         
-        impact_dates = st.date_input("处理起至时间 (可选)", value=[], key="add_impact_dates")
-        add_impact_start = impact_dates[0] if impact_dates and len(impact_dates) > 0 else None
-        add_impact_end = impact_dates[1] if impact_dates and len(impact_dates) == 2 else None
-            
-        if st.form_submit_button("添加") and _try_manual_add(db, add_name, add_student_id, add_major, add_reason_text, add_reason_file, add_date, add_impact_start, add_impact_end):
-            st.rerun()
+    if st.button("添加", key="admin_add_btn") and _try_manual_add(db, add_name, add_student_id, add_major, add_reason_text, add_reason_file, add_date, add_impact_start, add_impact_end):
+        # 成功以后手动清空通过 state 更新组件来重置，简单做法是给各个 key 清空；或直接由底层通过 rerun 来重置未保存的 session_state。
+        # 这里为了快速响应直接刷新页面。
+        st.rerun()
 
 
 # ── 生效名单 ──────────────────────────────────────────────
@@ -420,49 +418,42 @@ def _render_edit_form_section():
             _clear_edit_id()
             st.rerun()
             return
-        with st.form("admin_edit_form"):
-            st.caption(f"正在编辑记录 ID：{edit_id}（{LABEL_STUDENT_ID}不可修改）")
-            edit_name = st.text_input(LABEL_NAME, value=rec.name, key="admin_edit_name")
-            st.text_input(f"{LABEL_STUDENT_ID}（不可修改）", value=rec.student_id, disabled=True, key="admin_edit_sid_display")
-            # 智能搜索式选择框：优先从标准院系列表选，也可自定义输入
-            _cur_major = rec.major or ""
-            _default_idx = UNIT_INPUT_OPTIONS.index(_cur_major) if _cur_major in UNIT_INPUT_OPTIONS else 0
-            _major_sel = st.selectbox(LABEL_MAJOR, options=UNIT_INPUT_OPTIONS, index=_default_idx,
-                                      key="admin_edit_major_sel")
-            if _major_sel == LABEL_CUSTOM_INPUT:
-                edit_major = st.text_input("自定义单位名称", value=_cur_major, key="admin_edit_major_custom")
-            elif _major_sel:
-                edit_major = _major_sel
-            else:
-                edit_major = _cur_major
-            edit_reason_text = st.text_input("处理原因(文字)", value=(rec.reason_text or ""), key="admin_edit_reason_text")
-            if rec.reason:
-                st.caption(f"当前已有结论文件：{rec.reason.split('/')[-1]}")
-            edit_reason_file = st.file_uploader(f"更新认定结论 (PDF)", type=["pdf"], key="admin_edit_reason_file")
+        st.caption(f"正在编辑记录 ID：{edit_id}（{LABEL_STUDENT_ID}不可修改）")
+        edit_name = st.text_input(LABEL_NAME, value=rec.name, key="admin_edit_name")
+        st.text_input(f"{LABEL_STUDENT_ID}（不可修改）", value=rec.student_id, disabled=True, key="admin_edit_sid_display")
+        
+        from views.components import render_single_unit_selector
+        edit_major = render_single_unit_selector("admin_edit_major", default_val=rec.major or "")
+        
+        edit_reason_text = st.text_input("处理原因(文字)", value=(rec.reason_text or ""), key="admin_edit_reason_text")
+        if rec.reason:
+            st.caption(f"当前已有结论文件：{rec.reason.split('/')[-1]}")
+        edit_reason_file = st.file_uploader(f"更新认定结论 (PDF)", type=["pdf"], key="admin_edit_reason_file")
+        
+        edit_date_val = rec.punishment_date
+        edit_date = st.date_input(LABEL_PUNISHMENT_DATE, value=edit_date_val or datetime.now().date(), key="admin_edit_date")
+        
+        default_dates = []
+        if rec.impact_start_date and rec.impact_end_date:
+            default_dates = [rec.impact_start_date, rec.impact_end_date]
+        elif rec.impact_start_date:
+            default_dates = [rec.impact_start_date]
             
-            edit_date_val = rec.punishment_date
-            edit_date = st.date_input(LABEL_PUNISHMENT_DATE, value=edit_date_val or datetime.now().date(), key="admin_edit_date")
+        impact_dates_edit = st.date_input("处理起至时间 (可选)", value=default_dates or [], key="admin_edit_impact_dates")
+        edit_impact_start = impact_dates_edit[0] if impact_dates_edit and len(impact_dates_edit) > 0 else None
+        edit_impact_end = impact_dates_edit[1] if impact_dates_edit and len(impact_dates_edit) == 2 else None
             
-            default_dates = []
-            if rec.impact_start_date and rec.impact_end_date:
-                default_dates = [rec.impact_start_date, rec.impact_end_date]
-            elif rec.impact_start_date:
-                default_dates = [rec.impact_start_date]
-                
-            impact_dates_edit = st.date_input("处理起至时间 (可选)", value=default_dates or [], key="admin_edit_impact_dates")
-            edit_impact_start = impact_dates_edit[0] if impact_dates_edit and len(impact_dates_edit) > 0 else None
-            edit_impact_end = impact_dates_edit[1] if impact_dates_edit and len(impact_dates_edit) == 2 else None
-                
-            col_save, col_cancel = st.columns(2)
-            with col_save:
-                submit_save = st.form_submit_button("保存修改")
-            with col_cancel:
-                submit_cancel = st.form_submit_button("取消")
-            if submit_save:
-                _try_save_edit_form(edit_db, rec, edit_id, edit_name, edit_major, edit_reason_text, edit_reason_file, edit_date, edit_impact_start, edit_impact_end)
-            elif submit_cancel:
-                _clear_edit_id()
-                st.rerun()
+        col_save, col_cancel = st.columns(2)
+        with col_save:
+            submit_save = st.button("保存修改", key="btn_save_edit", use_container_width=True, type="primary")
+        with col_cancel:
+            submit_cancel = st.button("取消", key="btn_cancel_edit", use_container_width=True)
+            
+        if submit_save:
+            _try_save_edit_form(edit_db, rec, edit_id, edit_name, edit_major, edit_reason_text, edit_reason_file, edit_date, edit_impact_start, edit_impact_end)
+        elif submit_cancel:
+            _clear_edit_id()
+            st.rerun()
 
 
 # ── 已撤销名单 ──────────────────────────────────────────

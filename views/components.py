@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 通用 UI 组件：分页、筛选、排序、导出等可复用的 Streamlit 渲染函数。
 供 admin_page / teacher_page 等视图共享，消除重复代码。
@@ -433,6 +435,52 @@ def render_blacklist_export_button(db, status: int, fn: str, fs: str, fm: list[s
             use_container_width=True
         )
 
+
+def render_single_unit_selector(key_prefix: str, default_val: str = "", label: str = "所在单位") -> str:
+    """渲染类似名单查询页面的级联单位选择器（弹出单选版 + 模糊检索）。注意：此组件包含 st.button，不可放于 st.form 内。"""
+    from core.config import ALL_UNIT_LIST
+    sel_key = f"{key_prefix}_single_unit"
+    if sel_key not in st.session_state:
+        st.session_state[sel_key] = default_val
+        
+    current_val = st.session_state[sel_key]
+    
+    st.markdown(f"<div style='font-size:14px;margin-bottom:6px;opacity:0.8'>{label}</div>", unsafe_allow_html=True)
+    btn_label = f"🏫 当前选择：{current_val}" if current_val else "🏫 请点击展开详细分类面板 ▾"
+    with st.popover(btn_label, use_container_width=True):
+        st.markdown("<div style='font-size:13px;color:gray;margin-bottom:8px'>在下方输入关键字模糊检索，或者按大类折叠展开选择。选中后将自动套用并折叠该面板。</div>", unsafe_allow_html=True)
+        
+        # 1. 严格在已知单位列表中提供模糊搜索，避免默认展开全部平铺项（基于用户输入的纯净搜索）
+        search_key = f"{key_prefix}_search"
+        search_val = st.text_input("模糊检索", key=search_key, placeholder="【🔍 输入搜索词按回车，仅显示匹配项】", label_visibility="collapsed")
+        
+        # 只要用户输入了有意义的字词，才展示匹配结果
+        if search_val and search_val.strip():
+            matches = [u for u in ALL_UNIT_LIST if search_val.strip().lower() in u.lower()]
+            if matches:
+                st.caption(f"为您查找到以下 **{len(matches)}** 个相关单位，点击直接录入：")
+                for m in matches:
+                    # 使用与下方面板不同的颜色或样式以示区分
+                    if st.button(m, key=f"{key_prefix}_match_{m}", use_container_width=True, type="primary"):
+                        st.session_state[sel_key] = m
+                        # 选中后立刻自动清除搜索框状态，并触发重载收起面板
+                        st.session_state[search_key] = ""
+                        st.rerun()
+            else:
+                st.caption("未查找到包含该字符的单位分类。")
+            st.markdown("---")
+            
+        with st.container(height=300, border=False):
+            # 2. 保留分类浏览折叠面板
+            for cat, units in UNIT_CATEGORY_MAP.items():
+                with st.expander(f"📁 **{cat}** ({len(units)}个院系)"):
+                    for u in units:
+                        btn_type = "primary" if current_val == u else "secondary"
+                        if st.button(u, key=f"{key_prefix}_btn_{u}", use_container_width=True, type=btn_type):
+                            st.session_state[sel_key] = u
+                            st.rerun()
+                            
+    return st.session_state[sel_key]
 
 def clamp_page(page_key: str, total_pages: int) -> int:
     """从 session_state 读取当前页并限制在有效范围内。"""

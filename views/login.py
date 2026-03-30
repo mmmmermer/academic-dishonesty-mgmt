@@ -75,7 +75,9 @@ def render_login_page():
         if count >= LOGIN_FAIL_MAX and (time.time() - last_ts) < LOGIN_COOLDOWN_SECONDS:
             _show_error(MSG_LOGIN_TOO_MANY_FAIL)
             return
-        # 冷却期已过则继续尝试，后续失败会重新计数
+        # 冷却期已过：重置计数器，从 0 开始重新计数
+        if count >= LOGIN_FAIL_MAX:
+            clear_login_fail(username_stripped)
 
     with db_session() as db:
         try:

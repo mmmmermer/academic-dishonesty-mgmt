@@ -11,6 +11,9 @@ from typing import Any, Optional, Tuple
 import pandas as pd  # type: ignore[reportMissingImports]
 import streamlit as st
 
+import logging as _logging
+_logger = _logging.getLogger(__name__)
+
 from .database import DATABASE_DIR, IS_SQLITE, db_session
 from .models import AuditLog
 
@@ -71,13 +74,9 @@ def safe_filename(raw: str) -> str:
     将原始字符串净化为安全的文件名片段：仅保留字母、数字、下划线。
     防止路径遍历攻击（如 ../../etc/passwd）。
     """
-    import re
     cleaned = clean_student_id(raw)
     return re.sub(r'[^a-zA-Z0-9_]', '', cleaned) or "unknown"
 
-
-import logging as _logging
-_logger = _logging.getLogger(__name__)
 
 # PDF 存储根目录（项目根/static/pdfs）
 _PDF_DIR = os.path.join(DATABASE_DIR, "static", "pdfs")
