@@ -173,6 +173,36 @@ def render_list_controls(key_prefix: str, sort_columns=None, page_size_options=N
         [data-testid="stPopoverBody"] label[data-baseweb="checkbox"] {
             margin-bottom: -4px !important; 
         }
+        /* 单位筛选 Popover 内：滚动容器为 VerticalBlock > VerticalBlock > HorizontalBlock，仅在此固定三列（子 div 用 nth-child 兼容不同 testid） */
+        [data-testid="stPopoverBody"] [data-testid="stVerticalBlock"] [data-testid="stVerticalBlock"] [data-testid="stHorizontalBlock"] > div:nth-child(1) {
+            flex: 0 0 2.5rem !important;
+            min-width: 2.5rem !important;
+            max-width: 2.5rem !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: flex-start !important;
+            padding-left: 0 !important;
+            padding-right: 0 !important;
+        }
+        [data-testid="stPopoverBody"] [data-testid="stVerticalBlock"] [data-testid="stVerticalBlock"] [data-testid="stHorizontalBlock"] > div:nth-child(1) [data-testid="stCheckbox"] {
+            margin-left: 0 !important;
+        }
+        [data-testid="stPopoverBody"] [data-testid="stVerticalBlock"] [data-testid="stVerticalBlock"] [data-testid="stHorizontalBlock"] > div:nth-child(2) {
+            flex: 0 0 6rem !important;
+            min-width: 6rem !important;
+            max-width: 6rem !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: flex-start !important;
+            padding-left: 0 !important;
+        }
+        [data-testid="stPopoverBody"] [data-testid="stVerticalBlock"] [data-testid="stVerticalBlock"] [data-testid="stHorizontalBlock"] > div:nth-child(2) div.stMarkdown {
+            width: 100% !important;
+        }
+        [data-testid="stPopoverBody"] [data-testid="stVerticalBlock"] [data-testid="stVerticalBlock"] [data-testid="stHorizontalBlock"] > div:nth-child(3) {
+            flex: 1 1 auto !important;
+            min-width: 0 !important;
+        }
         </style>
     """, unsafe_allow_html=True)
 
@@ -213,14 +243,27 @@ def render_list_controls(key_prefix: str, sort_columns=None, page_size_options=N
             with st.container(height=320, border=False):
                 # 优先渲染常规类别
                 for cat, units in UNIT_CATEGORY_MAP.items():
-                    # 左右两列排布：左边全选，由于字数变少，给右变释放更多空间（避免展开细选折行）
-                    c_chk, c_exp = st.columns([2.5, 7.5])
-                    
-                    with c_chk:
-                        is_all = st.checkbox(f"**{cat}**", key=f"{key_prefix}_chk_cat_{cat}")
-                        if is_all:
-                            fm.append(f"【全选】{cat}")
-                            
+                    # 单行三列：不得在外层列内再嵌套 st.columns（Streamlit 仅允许一层列嵌套）；
+                    # 比例与上方 CSS 中固定列宽配合，使复选框与「工科一/理科」等列对齐。
+                    c_box, c_lbl, c_exp = st.columns(
+                        [0.55, 2.25, 7.2], gap="small", vertical_alignment="center"
+                    )
+
+                    with c_box:
+                        is_all = st.checkbox(
+                            "",
+                            key=f"{key_prefix}_chk_cat_{cat}",
+                            label_visibility="collapsed",
+                            help=f"全选「{cat}」下所有院系",
+                        )
+                    with c_lbl:
+                        st.markdown(
+                            f"<div style='width:100%;font-weight:600;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>{cat}</div>",
+                            unsafe_allow_html=True,
+                        )
+                    if is_all:
+                        fm.append(f"【全选】{cat}")
+
                     with c_exp:
                         with st.expander(f"📁 展开细选 ({len(units)}个院系)"):
                             # 既然右侧面板已分割变窄，内部恢复为单列排列防止院系名称过长被挤折行
@@ -439,47 +482,73 @@ def render_blacklist_export_button(db, status: int, fn: str, fs: str, fm: list[s
 def render_single_unit_selector(key_prefix: str, default_val: str = "", label: str = "所在单位") -> str:
     """渲染类似名单查询页面的级联单位选择器（弹出单选版 + 模糊检索）。注意：此组件包含 st.button，不可放于 st.form 内。"""
     from core.config import ALL_UNIT_LIST
+
     sel_key = f"{key_prefix}_single_unit"
+    search_key = f"{key_prefix}_search"
+    clear_key = f"{key_prefix}_search_clear"
+    panel_open_key = f"{key_prefix}_unit_panel_open"
+    toggle_key = f"{key_prefix}_panel_toggle"
+
     if sel_key not in st.session_state:
         st.session_state[sel_key] = default_val
-        
+
+    # 必须在创建 text_input 之前清空，否则同一次 run 内改 key 会触发 StreamlitAPIException
+    if st.session_state.get(clear_key):
+        if search_key in st.session_state:
+            st.session_state[search_key] = ""
+        st.session_state[clear_key] = False
+
     current_val = st.session_state[sel_key]
-    
+
     st.markdown(f"<div style='font-size:14px;margin-bottom:6px;opacity:0.8'>{label}</div>", unsafe_allow_html=True)
     btn_label = f"🏫 当前选择：{current_val}" if current_val else "🏫 请点击展开详细分类面板 ▾"
-    with st.popover(btn_label, use_container_width=True):
-        st.markdown("<div style='font-size:13px;color:gray;margin-bottom:8px'>在下方输入关键字模糊检索，或者按大类折叠展开选择。选中后将自动套用并折叠该面板。</div>", unsafe_allow_html=True)
-        
-        # 1. 严格在已知单位列表中提供模糊搜索，避免默认展开全部平铺项（基于用户输入的纯净搜索）
-        search_key = f"{key_prefix}_search"
-        search_val = st.text_input("模糊检索", key=search_key, placeholder="【🔍 输入搜索词按回车，仅显示匹配项】", label_visibility="collapsed")
-        
-        # 只要用户输入了有意义的字词，才展示匹配结果
+    panel_open = st.session_state.get(panel_open_key, False)
+    toggle_label = btn_label if not panel_open else (f"🏫 {current_val or '未选择'} · 点击收起 ▾")
+
+    if st.button(toggle_label, key=toggle_key, use_container_width=True):
+        st.session_state[panel_open_key] = not panel_open
+        st.rerun()
+
+    if not st.session_state.get(panel_open_key, False):
+        return st.session_state[sel_key]
+
+    with st.container(border=True):
+        st.markdown(
+            "<div style='font-size:13px;color:gray;margin-bottom:8px'>在下方输入关键字模糊检索，或者按大类折叠展开选择。选中后将自动套用并折叠该面板。</div>",
+            unsafe_allow_html=True,
+        )
+
+        search_val = st.text_input(
+            "模糊检索",
+            key=search_key,
+            placeholder="【🔍 输入搜索词按回车，仅显示匹配项】",
+            label_visibility="collapsed",
+        )
+
         if search_val and search_val.strip():
             matches = [u for u in ALL_UNIT_LIST if search_val.strip().lower() in u.lower()]
             if matches:
                 st.caption(f"为您查找到以下 **{len(matches)}** 个相关单位，点击直接录入：")
                 for m in matches:
-                    # 使用与下方面板不同的颜色或样式以示区分
                     if st.button(m, key=f"{key_prefix}_match_{m}", use_container_width=True, type="primary"):
                         st.session_state[sel_key] = m
-                        # 选中后立刻自动清除搜索框状态，并触发重载收起面板
-                        st.session_state[search_key] = ""
+                        st.session_state[clear_key] = True
+                        st.session_state[panel_open_key] = False
                         st.rerun()
             else:
                 st.caption("未查找到包含该字符的单位分类。")
             st.markdown("---")
-            
+
         with st.container(height=300, border=False):
-            # 2. 保留分类浏览折叠面板
             for cat, units in UNIT_CATEGORY_MAP.items():
                 with st.expander(f"📁 **{cat}** ({len(units)}个院系)"):
                     for u in units:
                         btn_type = "primary" if current_val == u else "secondary"
                         if st.button(u, key=f"{key_prefix}_btn_{u}", use_container_width=True, type=btn_type):
                             st.session_state[sel_key] = u
+                            st.session_state[panel_open_key] = False
                             st.rerun()
-                            
+
     return st.session_state[sel_key]
 
 def clamp_page(page_key: str, total_pages: int) -> int:
