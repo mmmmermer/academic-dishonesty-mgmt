@@ -1,0 +1,23 @@
+# 复制到服务器：sudo cp hustsystem.service.example /etc/systemd/system/hustsystem.service
+# 然后 sudo nano /etc/systemd/system/hustsystem.service
+# 将下面三处「按需修改」改为你的实际值，再执行 daemon-reload / enable / start
+
+[Unit]
+Description=HUST 学术道德监督管理系统 (Streamlit)
+After=network.target
+
+[Service]
+# 【按需修改】运行服务的 Linux 用户（不要用 root 时改成 www 等）
+User=你的Linux用户名
+# 【按需修改】项目根目录（须含 app.py、venv）
+WorkingDirectory=/opt/hustsystem
+Environment="PATH=/opt/hustsystem/venv/bin"
+# 使用 MySQL/PostgreSQL 时取消注释并填写（单行，无换行）
+# Environment="DATABASE_URL=mysql+pymysql://用户:密码@127.0.0.1:3306/库名?charset=utf8mb4"
+
+ExecStart=/opt/hustsystem/venv/bin/python -m streamlit run app.py --server.address=0.0.0.0 --server.port=8501 --server.headless=true
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
