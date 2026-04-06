@@ -22,6 +22,7 @@ if (!(Test-Path $app)) {
 }
 
 $encodedPassword = [System.Uri]::EscapeDataString($DbPassword)
+$env:ALLOW_SQLITE_FALLBACK = "0"
 $env:DATABASE_URL = "postgresql+psycopg2://$DbUser`:$encodedPassword@$DbHost`:$DbPort/$DbName"
 Write-Host "DATABASE_URL set for PostgreSQL target: ${DbHost}:${DbPort}/${DbName} (user=$DbUser)"
 if ($DbPassword -eq "123456") {

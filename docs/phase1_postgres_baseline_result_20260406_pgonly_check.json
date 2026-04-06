@@ -1,0 +1,167 @@
+{
+  "timestamp": "2026-04-06 22:42:28",
+  "database_url": "postgresql+psycopg2://hustapp:123456@127.0.0.1:5432/hustsystem",
+  "is_sqlite": false,
+  "dataset": {
+    "total_records": 164,
+    "active_records": 101
+  },
+  "samples": {
+    "name1": "张伟",
+    "id1": "110101200102201001",
+    "name2": "李娜",
+    "id2": "110101200205182002",
+    "name1_spaced": "张 伟",
+    "name1_pinyin_full": "zhangwei",
+    "name1_pinyin_abbr": "zw"
+  },
+  "teacher": [
+    {
+      "case": "name_exact",
+      "query": "张伟",
+      "candidates": 1,
+      "hits": 1,
+      "modes": [
+        "name_exact"
+      ],
+      "ms": 254.92
+    },
+    {
+      "case": "name_spaced",
+      "query": "张 伟",
+      "candidates": 1,
+      "hits": 1,
+      "modes": [
+        "name_exact"
+      ],
+      "ms": 1.88
+    },
+    {
+      "case": "id_exact",
+      "query": "110101200102201001",
+      "candidates": 1,
+      "hits": 1,
+      "modes": [
+        "student_id_exact"
+      ],
+      "ms": 3.14
+    },
+    {
+      "case": "name_and_id",
+      "query": "张伟 110101200102201001",
+      "candidates": 1,
+      "hits": 1,
+      "modes": [
+        "student_id_exact+name_exact"
+      ],
+      "ms": 2.6
+    },
+    {
+      "case": "multi_newline",
+      "query": "张伟\n李娜",
+      "candidates": 2,
+      "hits": 2,
+      "modes": [
+        "name_exact"
+      ],
+      "ms": 3.44
+    },
+    {
+      "case": "multi_comma",
+      "query": "张伟,李娜",
+      "candidates": 2,
+      "hits": 2,
+      "modes": [
+        "name_exact"
+      ],
+      "ms": 3.39
+    },
+    {
+      "case": "pinyin_full",
+      "query": "zhangwei",
+      "candidates": 1,
+      "hits": 1,
+      "modes": [
+        "pinyin_full"
+      ],
+      "ms": 3.41
+    },
+    {
+      "case": "pinyin_abbr",
+      "query": "zw",
+      "candidates": 1,
+      "hits": 1,
+      "modes": [
+        "pinyin_abbr"
+      ],
+      "ms": 2.55
+    },
+    {
+      "case": "typo_probe",
+      "query": "张烜",
+      "candidates": 0,
+      "hits": 0,
+      "modes": [],
+      "ms": 1.55
+    },
+    {
+      "case": "homophone_probe",
+      "query": "王方",
+      "candidates": 0,
+      "hits": 0,
+      "modes": [],
+      "ms": 1.61
+    }
+  ],
+  "admin": [
+    {
+      "case": "name_exact",
+      "name_filter": "张伟",
+      "sid_filter": "",
+      "count": 1,
+      "ms": 6.94
+    },
+    {
+      "case": "name_spaced",
+      "name_filter": "张 伟",
+      "sid_filter": "",
+      "count": 1,
+      "ms": 2.25
+    },
+    {
+      "case": "name_partial",
+      "name_filter": "张",
+      "sid_filter": "",
+      "count": 1,
+      "ms": 3.07
+    },
+    {
+      "case": "name_pinyin_full",
+      "name_filter": "zhangwei",
+      "sid_filter": "",
+      "count": 1,
+      "ms": 4.72
+    },
+    {
+      "case": "name_pinyin_abbr",
+      "name_filter": "zw",
+      "sid_filter": "",
+      "count": 1,
+      "ms": 4.6
+    },
+    {
+      "case": "name_multi_comma",
+      "name_filter": "张伟,李娜",
+      "sid_filter": "",
+      "count": 2,
+      "ms": 5.55
+    },
+    {
+      "case": "sid_multi",
+      "name_filter": "",
+      "sid_filter": "110101200102201001 110101200205182002",
+      "count": 2,
+      "ms": 4.18
+    }
+  ]
+}

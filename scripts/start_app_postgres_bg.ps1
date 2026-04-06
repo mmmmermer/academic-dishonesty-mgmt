@@ -93,7 +93,7 @@ $encodedPassword = [System.Uri]::EscapeDataString($DbPassword)
 $databaseUrl = "postgresql+psycopg2://$DbUser`:$encodedPassword@$DbHost`:$DbPort/$DbName"
 
 # Child process sets DATABASE_URL and keeps streamlit in background.
-$command = "$env:DATABASE_URL = '$databaseUrl'; & '$python' -m streamlit run '$app' --server.address=$AppHost --server.port=$AppPort 1>>'$stdoutLog' 2>>'$stderrLog'"
+$command = "$env:ALLOW_SQLITE_FALLBACK = '0'; $env:DATABASE_URL = '$databaseUrl'; & '$python' -m streamlit run '$app' --server.address=$AppHost --server.port=$AppPort 1>>'$stdoutLog' 2>>'$stderrLog'"
 
 $proc = Start-Process `
     -FilePath $hostExe `

@@ -16,6 +16,7 @@ from sqlalchemy.orm import sessionmaker
 DATABASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # 优先使用环境变量；未设置时使用默认 SQLite 路径（便于本地开发零配置）
+_allow_sqlite_fallback = os.environ.get("ALLOW_SQLITE_FALLBACK", "").strip().lower() in {"1", "true", "yes"}
 _env_url = os.environ.get("DATABASE_URL", "").strip()
 if not _env_url:
     DATABASE_URL = f"sqlite:///{os.path.join(DATABASE_DIR, 'database.db')}"
@@ -37,6 +38,17 @@ else:
                     )
 
 # 是否为 SQLite（供备份/下载等逻辑判断是否可操作本地 .db 文件）
+if not _env_url and not _allow_sqlite_fallback:
+    raise RuntimeError(
+        "DATABASE_URL is required in PostgreSQL-only mode. "
+        "If you need temporary SQLite fallback, set ALLOW_SQLITE_FALLBACK=1 explicitly."
+    )
+if "sqlite" in DATABASE_URL and not _allow_sqlite_fallback:
+    raise RuntimeError(
+        "SQLite is disabled in PostgreSQL-only mode. "
+        "Use a PostgreSQL DATABASE_URL, or set ALLOW_SQLITE_FALLBACK=1 for temporary maintenance."
+    )
+
 IS_SQLITE = "sqlite" in DATABASE_URL
 
 # 创建引擎：按数据库类型选择参数
