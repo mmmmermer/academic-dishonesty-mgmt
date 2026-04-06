@@ -96,6 +96,7 @@ def build_blacklist_query(db, status: int, name_filter: str = "", sid_filter: st
                 sql_filter, sql_params = build_name_terms_sql_filter(
                     name_terms,
                     include_helper_columns=True,
+                    prefix_min_len=1,
                 )
                 if sql_filter is None:
                     q = q.filter(Blacklist.id == -1)
@@ -105,6 +106,7 @@ def build_blacklist_query(db, status: int, name_filter: str = "", sid_filter: st
                 matched_ids = filter_record_ids_by_name_terms(
                     q.yield_per(PYTHON_NAME_SCAN_YIELD_BATCH),
                     name_terms,
+                    prefix_min_len=1,
                 )
                 if not matched_ids:
                     q = q.filter(Blacklist.id == -1)
@@ -450,12 +452,15 @@ SPINNER_EXPORT = "准备导出中…"
 
 def fetch_export_rows(query, max_rows: int = EXPORT_MAX_ROWS, batch_size: int = EXPORT_BATCH_SIZE):
     """按排序查询分批拉取记录，最多 max_rows 条。"""
+    if max_rows <= 0:
+        return []
+
     rows = []
-    for offset in range(0, max_rows, batch_size):
-        batch = query.offset(offset).limit(batch_size).all()
-        if not batch:
-            break
-        rows.extend(batch)
+    stream_query = query.limit(max_rows)
+    if batch_size > 0:
+        stream_query = stream_query.yield_per(batch_size)
+    for row in stream_query:
+        rows.append(row)
     return rows
 
 

@@ -66,11 +66,11 @@ def _fetch_audit_logs(db, filter_operator, filter_type, use_date_filter, filter_
 def _fetch_audit_logs_export_batched(db, filter_operator, filter_type, use_date_filter, filter_date):
     q = _audit_log_export_query(db, filter_operator, filter_type, use_date_filter, filter_date)
     rows = []
-    for offset in range(0, EXPORT_MAX_ROWS, EXPORT_BATCH_SIZE):
-        batch = q.offset(offset).limit(EXPORT_BATCH_SIZE).all()
-        if not batch:
-            break
-        rows.extend(batch)
+    stream_query = q.limit(EXPORT_MAX_ROWS)
+    if EXPORT_BATCH_SIZE > 0:
+        stream_query = stream_query.yield_per(EXPORT_BATCH_SIZE)
+    for row in stream_query:
+        rows.append(row)
     return rows
 
 

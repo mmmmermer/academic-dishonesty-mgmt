@@ -42,6 +42,7 @@ from core.config import (
 )
 from core.database import db_session
 from core.models import Blacklist
+from core.search import sync_blacklist_record_search_helper_fields
 from core.utils import (
     REQUIRED_EXCEL_COLUMNS,
     cell_str,
@@ -144,6 +145,7 @@ def _upsert_one_blacklist(db, sid, name, major, reason_text, punishment_date, im
         if impact_end is not None:
             existing.impact_end_date = impact_end
         existing.status = 1
+        sync_blacklist_record_search_helper_fields(db, existing)
         return "updated"
     rec = Blacklist(
         name=name, student_id=sid, major=major or None, reason_text=reason_text or None,
@@ -151,6 +153,7 @@ def _upsert_one_blacklist(db, sid, name, major, reason_text, punishment_date, im
         impact_start_date=impact_start, impact_end_date=impact_end,
     )
     db.add(rec)
+    sync_blacklist_record_search_helper_fields(db, rec)
     return "imported"
 
 
@@ -261,6 +264,7 @@ def _try_manual_add(db, add_name, add_student_id, add_major, add_reason_text, ad
                 status=1,
             )
             db.add(rec)
+            sync_blacklist_record_search_helper_fields(db, rec)
             db.commit()
             log_audit_action(AUDIT_ADD, target=add_name, details=f"学号 {sid_clean[:8]}***")
             st.success(SUCCESS_ADDED)
@@ -396,6 +400,7 @@ def _try_save_edit_form(edit_db, rec, edit_id, edit_name, edit_major, edit_reaso
         rec.punishment_date = edit_date
         rec.impact_start_date = edit_impact_start
         rec.impact_end_date = edit_impact_end
+        sync_blacklist_record_search_helper_fields(edit_db, rec)
         
         edit_db.commit()
         log_audit_action(AUDIT_ADD, target=f"编辑记录 {edit_id}", details=f"{rec.name} {rec.student_id[:8]}***")

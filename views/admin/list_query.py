@@ -10,6 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from core.models import Blacklist
+from core.search import sync_blacklist_record_search_helper_fields
 from core.utils import sanitize_for_export, clean_student_id, safe_filename, remove_old_pdf, log_audit_action
 from core.config import (
     CAPTION_FILTER_BY_NAME_SID_MAJOR, EMPTY_NO_EFFECTIVE,
@@ -250,6 +251,7 @@ def _show_edit_dialog(db, edit_id):
             rec.punishment_date = edit_date
             rec.impact_start_date = edit_impact_start
             rec.impact_end_date = edit_impact_end
+            sync_blacklist_record_search_helper_fields(db, rec)
             db.commit()
             log_audit_action(AUDIT_ADD, target=f"弹窗编辑 {rec.id}", details=f"{rec.name} {rec.student_id[:8]}***")
             st.success(SUCCESS_SAVED)

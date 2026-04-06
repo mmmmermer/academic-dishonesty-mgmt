@@ -188,6 +188,7 @@ def build_name_terms_sql_filter(
     name_terms: list[str],
     *,
     include_helper_columns: bool,
+    prefix_min_len: int | None = None,
 ):
     """
     Build SQL filter + bound parameters for mixed Chinese/Pinyin search terms.
@@ -197,6 +198,7 @@ def build_name_terms_sql_filter(
 
     clauses: list[str] = []
     params: dict[str, str] = {}
+    prefix_threshold = PINYIN_PREFIX_MIN_LEN if prefix_min_len is None else max(1, prefix_min_len)
 
     for idx, term in enumerate(name_terms):
         kind = detect_input_type(term)
@@ -233,7 +235,7 @@ def build_name_terms_sql_filter(
                 params[key_abbr] = normalized
                 per_term.append(f"name_abbr = :{key_abbr}")
 
-            if len(normalized) >= PINYIN_PREFIX_MIN_LEN:
+            if len(normalized) >= prefix_threshold:
                 key_full_prefix = f"pf_pre_{idx}"
                 key_abbr_prefix = f"pa_pre_{idx}"
                 params[key_full_prefix] = f"{_sql_like_escape(normalized)}%"
@@ -319,7 +321,89 @@ def compute_name_fields(name: str) -> dict[str, str]:
     }
 
 
-def match_name_query(record_name: str, query: str) -> tuple[int, str] | None:
+def sync_blacklist_search_helper_fields(
+    db,
+    *,
+    name: str,
+    record_id: int | None = None,
+    student_id: str | None = None,
+) -> bool:
+    """Sync search helper columns for one blacklist row when columns exist."""
+    if not name:
+        return False
+
+    bind = db.get_bind()
+    if not has_search_helper_columns(bind):
+        return False
+
+    if record_id is None and not student_id:
+        return False
+
+    from sqlalchemy import text
+
+    fields = compute_name_fields(name)
+    params: dict[str, str | int] = {
+        "name_norm": fields["name_normalized"],
+        "name_pinyin_full": fields["name_pinyin"],
+        "name_abbr": fields["name_abbr"],
+    }
+
+    if record_id is not None:
+        params["record_id"] = record_id
+        db.execute(
+            text(
+                """
+                UPDATE blacklist
+                SET name_norm = :name_norm,
+                    name_pinyin_full = :name_pinyin_full,
+                    name_abbr = :name_abbr
+                WHERE id = :record_id
+                """
+            ),
+            params,
+        )
+        return True
+
+    sid = clean_student_id(student_id or "")
+    if not sid:
+        return False
+    params["student_id"] = sid
+    db.execute(
+        text(
+            """
+            UPDATE blacklist
+            SET name_norm = :name_norm,
+                name_pinyin_full = :name_pinyin_full,
+                name_abbr = :name_abbr
+            WHERE id_card = :student_id
+            """
+        ),
+        params,
+    )
+    return True
+
+
+def sync_blacklist_record_search_helper_fields(db, record: Blacklist) -> bool:
+    """Sync helper columns by ORM row object; flushes only when row id is missing."""
+    if not record:
+        return False
+    if not has_search_helper_columns(db.get_bind()):
+        return False
+    if record.id is None:
+        db.flush()
+    return sync_blacklist_search_helper_fields(
+        db,
+        name=record.name or "",
+        record_id=record.id,
+    )
+
+
+def match_name_query(
+    record_name: str,
+    query: str,
+    *,
+    prefix_min_len: int = PINYIN_PREFIX_MIN_LEN,
+) -> tuple[int, str] | None:
     """对单条记录姓名做中文 / 拼音 / 首字母匹配。"""
     if not query or not query.strip():
         return None
@@ -341,13 +425,14 @@ def match_name_query(record_name: str, query: str) -> tuple[int, str] | None:
         normalized_query = normalize_pinyin_text(query)
         if not normalized_query or not fields["name_pinyin"]:
             return None
+        prefix_threshold = max(1, prefix_min_len)
         if normalized_query == fields["name_pinyin"]:
             return MATCH_RANKS[MATCH_PINYIN_FULL], MATCH_PINYIN_FULL
         if len(normalized_query) >= PINYIN_ABBR_EXACT_MIN_LEN and normalized_query == fields["name_abbr"]:
             return MATCH_RANKS[MATCH_PINYIN_ABBR], MATCH_PINYIN_ABBR
-        if len(normalized_query) >= PINYIN_PREFIX_MIN_LEN and fields["name_pinyin"].startswith(normalized_query):
+        if len(normalized_query) >= prefix_threshold and fields["name_pinyin"].startswith(normalized_query):
             return MATCH_RANKS[MATCH_PINYIN_PREFIX], MATCH_PINYIN_PREFIX
-        if len(normalized_query) >= PINYIN_PREFIX_MIN_LEN and fields["name_abbr"].startswith(normalized_query):
+        if len(normalized_query) >= prefix_threshold and fields["name_abbr"].startswith(normalized_query):
             return MATCH_RANKS[MATCH_PINYIN_ABBR_PREFIX], MATCH_PINYIN_ABBR_PREFIX
         if len(normalized_query) >= PINYIN_SUBSTRING_MIN_LEN and normalized_query in fields["name_pinyin"]:
             return MATCH_RANKS[MATCH_PINYIN_SUBSTRING], MATCH_PINYIN_SUBSTRING
@@ -466,14 +551,17 @@ def fetch_teacher_candidate_records(
 
 
 def filter_record_ids_by_name_terms(
-    records: Iterable[Blacklist], name_terms: list[str]
+    records: Iterable[Blacklist],
+    name_terms: list[str],
+    *,
+    prefix_min_len: int = PINYIN_PREFIX_MIN_LEN,
 ) -> list[int]:
     """管理员名单查询在 Python 层匹配拼音/首字母时使用。"""
     matched: list[tuple[int, int]] = []
     for record in records:
         best_match: tuple[int, str] | None = None
         for term in name_terms:
-            current = match_name_query(record.name, term)
+            current = match_name_query(record.name, term, prefix_min_len=prefix_min_len)
             if current is None:
                 continue
             if best_match is None or current[0] < best_match[0]:
