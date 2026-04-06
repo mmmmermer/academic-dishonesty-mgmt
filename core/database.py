@@ -41,6 +41,7 @@ else:
 if not _env_url and not _allow_sqlite_fallback:
     raise RuntimeError(
         "DATABASE_URL is required in PostgreSQL-only mode. "
+        "Start app via start_system.bat or scripts/run_app_postgres.ps1. "
         "If you need temporary SQLite fallback, set ALLOW_SQLITE_FALLBACK=1 explicitly."
     )
 if "sqlite" in DATABASE_URL and not _allow_sqlite_fallback:

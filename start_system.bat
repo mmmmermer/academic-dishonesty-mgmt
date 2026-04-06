@@ -3,6 +3,7 @@ setlocal
 
 set "ROOT_DIR=%~dp0"
 set "PS_SCRIPT=%ROOT_DIR%scripts\start_app_postgres_bg.ps1"
+set "STOP_SCRIPT=%ROOT_DIR%scripts\stop_app_postgres_bg.ps1"
 set "APP_PORT=8501"
 
 if not exist "%PS_SCRIPT%" (
@@ -26,6 +27,11 @@ if "%DB_PASSWORD%"=="" (
   exit /b 1
 )
 
+if exist "%STOP_SCRIPT%" (
+  echo [INFO] Stopping existing app on port %APP_PORT% if any...
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%STOP_SCRIPT%" -AppPort %APP_PORT% >nul 2>nul
+)
+
 powershell -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%" -DbPassword "%DB_PASSWORD%" -AppPort %APP_PORT%
 if errorlevel 1 (
   echo [ERROR] Start failed.
@@ -37,4 +43,3 @@ echo.
 echo [OK] App started on http://127.0.0.1:%APP_PORT%
 start "" "http://127.0.0.1:%APP_PORT%"
 exit /b 0
-
