@@ -42,10 +42,10 @@ def _render_selected_actions(db, selected_records):
     with cols[1]:
         if n == 1:
             rec = selected_records[0]
-            if st.button("✏️ 快捷编辑", use_container_width=True, key="btn_edit_sel"):
+            if st.button("✏️ 快捷编辑", width="stretch", key="btn_edit_sel"):
                 _show_edit_dialog(db, rec.id)
     with cols[2]:
-        if st.button(f"➕ 加入暂存区 ({n})", use_container_width=True, key="btn_add_to_cart"):
+        if st.button(f"➕ 加入暂存区 ({n})", width="stretch", key="btn_add_to_cart"):
             added, skipped = 0, 0
             for r in selected_records:
                 if r.id not in cart:
@@ -86,7 +86,7 @@ def _render_cart_panel(all_filtered_query=None, total_filtered=0):
                 unsafe_allow_html=True
             )
         with header_cols[1]:
-            if st.button("🧹 清空", use_container_width=True, key="btn_clear_cart"):
+            if st.button("🧹 清空", width="stretch", key="btn_clear_cart"):
                 st.session_state["admin_export_cart"] = {}
                 st.session_state["cart_clear_nonce"] = st.session_state.get("cart_clear_nonce", 0) + 1
                 st.session_state.pop("cart_sel", None)
@@ -113,7 +113,7 @@ def _render_cart_panel(all_filtered_query=None, total_filtered=0):
 
         sel_event = st.dataframe(
             view_df,
-            use_container_width=True,
+            width="stretch",
             height=min(300, max(1, len(view_df)) * 35 + 39),
             hide_index=True,
             on_select="rerun",
@@ -129,7 +129,7 @@ def _render_cart_panel(all_filtered_query=None, total_filtered=0):
             remove_disabled = not bool(to_remove)
             remove_label = f"🗑️ 移除已勾选 ({len(to_remove)})" if to_remove else "🗑️ 移除已勾选"
             if st.button(remove_label, type="primary" if to_remove else "secondary",
-                         disabled=remove_disabled, use_container_width=True, key="btn_remove_from_cart"):
+                         disabled=remove_disabled, width="stretch", key="btn_remove_from_cart"):
                 for rid in to_remove:
                     cart.pop(rid, None)
                 st.session_state["cart_clear_nonce"] = st.session_state.get("cart_clear_nonce", 0) + 1
@@ -140,7 +140,7 @@ def _render_cart_panel(all_filtered_query=None, total_filtered=0):
             if all_filtered_query is not None and total_filtered > 0:
                 limit = min(total_filtered, 200)
                 batch_label = f"➕ 全量入区 ({total_filtered} 条)" if total_filtered <= 200 else f"➕ 全量入区 (前 200 条)"
-                if st.button(batch_label, use_container_width=True, key="btn_batch_add_all"):
+                if st.button(batch_label, width="stretch", key="btn_batch_add_all"):
                     batch_records = all_filtered_query.limit(limit).all()
                     added, skipped = 0, 0
                     for r in batch_records:
@@ -186,7 +186,7 @@ def _render_cart_panel(all_filtered_query=None, total_filtered=0):
                 file_name=f"导出暂存区_{stamp}.xlsx",
                 mime=MIME_XLSX,
                 key="btn_export_cart",
-                use_container_width=True,
+                width="stretch",
                 type="primary"
             )
 
@@ -226,9 +226,9 @@ def _show_edit_dialog(db, edit_id):
         
     col_save, col_cancel = st.columns(2)
     with col_save:
-        submit_save = st.button("🚀 保存并更新", type="primary", use_container_width=True)
+        submit_save = st.button("🚀 保存并更新", type="primary", width="stretch")
     with col_cancel:
-        if st.button("取消关闭", use_container_width=True):
+        if st.button("取消关闭", width="stretch"):
             st.rerun()
 
     if submit_save:

@@ -1,0 +1,9 @@
+﻿{
+  "DbUser": "hustapp",
+  "DbPassword": "123456",
+  "DbHost": "127.0.0.1",
+  "DbPort": 5432,
+  "DbName": "hustsystem",
+  "AppHost": "127.0.0.1",
+  "AppPort": 8505
+}

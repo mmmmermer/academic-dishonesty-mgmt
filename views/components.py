@@ -27,6 +27,16 @@ from core.config import (
     UNIT_FILTER_OPTIONS,
 )
 from core.models import Blacklist
+from core.search_config import PYTHON_NAME_SCAN_YIELD_BATCH
+from core.search import (
+    build_name_terms_sql_filter,
+    build_chinese_name_sql_conditions,
+    filter_record_ids_by_name_terms,
+    has_search_helper_columns,
+    should_use_python_name_scan,
+    split_search_terms,
+    split_student_id_terms,
+)
 from core.utils import sanitize_for_export
 
 
@@ -66,23 +76,44 @@ def _unit_like_keyword(unit_name: str) -> str:
 def build_blacklist_query(db, status: int, name_filter: str = "", sid_filter: str = "",
                          major_categories: list[str] | None = None):
     """构建名单基础查询：支持多目标检索 + 分类多选筛选单位。"""
-    from sqlalchemy import and_, func, or_
+    from sqlalchemy import and_, or_
     q = db.query(Blacklist).filter(Blacklist.status == status)
-
-    if name_filter:
-        names = [n.strip() for n in name_filter.split() if n.strip()]
-        if len(names) > 1:
-            q = q.filter(or_(*[func.replace(Blacklist.name, ' ', '').like(f"%{_like_escape(n)}%", escape="\\") for n in names]))
-        else:
-            name_clean = "".join(name_filter.split())
-            q = q.filter(func.replace(Blacklist.name, ' ', '').like(f"%{_like_escape(name_clean)}%", escape="\\"))
+    helper_columns = has_search_helper_columns(db.get_bind())
 
     if sid_filter:
-        sids = [s.strip() for s in sid_filter.split() if s.strip()]
+        sids = split_student_id_terms(sid_filter)
+        if not sids:
+            return q.filter(Blacklist.id == -1)
         if len(sids) > 1:
             q = q.filter(or_(*[Blacklist.student_id.like(f"%{_like_escape(s)}%", escape="\\") for s in sids]))
         else:
-            q = q.filter(Blacklist.student_id.like(f"%{_like_escape(sid_filter)}%", escape="\\"))
+            q = q.filter(Blacklist.student_id.like(f"%{_like_escape(sids[0])}%", escape="\\"))
+
+    if name_filter:
+        name_terms = split_search_terms(name_filter)
+        if name_terms:
+            if helper_columns:
+                sql_filter, sql_params = build_name_terms_sql_filter(
+                    name_terms,
+                    include_helper_columns=True,
+                )
+                if sql_filter is None:
+                    q = q.filter(Blacklist.id == -1)
+                else:
+                    q = q.filter(sql_filter).params(**sql_params)
+            elif should_use_python_name_scan(name_terms):
+                matched_ids = filter_record_ids_by_name_terms(
+                    q.yield_per(PYTHON_NAME_SCAN_YIELD_BATCH),
+                    name_terms,
+                )
+                if not matched_ids:
+                    q = q.filter(Blacklist.id == -1)
+                else:
+                    q = q.filter(Blacklist.id.in_(matched_ids))
+            else:
+                name_conditions = build_chinese_name_sql_conditions(name_terms)
+                if name_conditions is not None:
+                    q = q.filter(name_conditions)
 
     if major_categories:
         units, has_uncategorized = _expand_unit_categories(major_categories)
@@ -209,12 +240,16 @@ def render_list_controls(key_prefix: str, sort_columns=None, page_size_options=N
     # 基础筛选与设置（第一行）
     c1, c2, c_settings = st.columns([4, 4, 3])
     with c1:
-        fn = st.text_input("姓名筛选", key=f"{key_prefix}_fn", placeholder=PLACEHOLDER_FILTER_EMPTY)
+        fn = st.text_input(
+            "姓名筛选",
+            key=f"{key_prefix}_fn",
+            placeholder="支持中文、拼音、首字母；多项请用换行、逗号或分号分隔",
+        )
     with c2:
         fs = st.text_input("学号/工号筛选", key=f"{key_prefix}_fs", placeholder=PLACEHOLDER_FILTER_EMPTY)
     with c_settings:
         st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
-        with st.popover("⚙️ 列表设置", use_container_width=True):
+        with st.popover("⚙️ 列表设置", width="stretch"):
             idx = page_size_options.index(page_size) if page_size in page_size_options else 0
             page_size = st.selectbox(LABEL_PAGE_SIZE, page_size_options, index=idx, key=ps_key)
             sort_key = st.selectbox(LABEL_SORT_COLUMN, sort_columns, key=sort_key_k)
@@ -239,7 +274,7 @@ def render_list_controls(key_prefix: str, sort_columns=None, page_size_options=N
         fm = []
         
         st.markdown("<div style='font-size:14px;margin-bottom:6px;opacity:0.8'>单位精准筛选 (点击下方展开面板)</div>", unsafe_allow_html=True)
-        with st.popover(btn_label, use_container_width=True):
+        with st.popover(btn_label, width="stretch"):
             with st.container(height=320, border=False):
                 # 优先渲染常规类别
                 for cat, units in UNIT_CATEGORY_MAP.items():
@@ -251,7 +286,7 @@ def render_list_controls(key_prefix: str, sort_columns=None, page_size_options=N
 
                     with c_box:
                         is_all = st.checkbox(
-                            "",
+                            f"Select all {cat}",
                             key=f"{key_prefix}_chk_cat_{cat}",
                             label_visibility="collapsed",
                             help=f"全选「{cat}」下所有院系",
@@ -330,7 +365,7 @@ def render_blacklist_table(records, page_size: int, current_page: int, selection
         
     event = st.dataframe(
         df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         height=computed_height,
         column_config={
@@ -360,7 +395,7 @@ def render_pagination(page_key: str, current_page: int, total_pages: int, total_
     # 主翻页行：上一页 | 页码 & 跳转 | 下一页
     c_prev, c_mid, c_next = st.columns([1, 3, 1])
     with c_prev:
-        if st.button("◀ 上一页", key=f"{page_key}_prev", disabled=(current_page <= 0), use_container_width=True):
+        if st.button("◀ 上一页", key=f"{page_key}_prev", disabled=(current_page <= 0), width="stretch"):
             st.session_state[page_key] = current_page - 1
             st.rerun()
     with c_mid:
@@ -378,11 +413,11 @@ def render_pagination(page_key: str, current_page: int, total_pages: int, total_
                 value=current_page + 1, key=f"{page_key}_jump", label_visibility="collapsed",
             )
         with jc3:
-            if st.button("Go", key=f"{page_key}_go", use_container_width=True) and 1 <= jump <= total_pages:
+            if st.button("Go", key=f"{page_key}_go", width="stretch") and 1 <= jump <= total_pages:
                 st.session_state[page_key] = int(jump) - 1
                 st.rerun()
     with c_next:
-        if st.button("下一页 ▶", key=f"{page_key}_next", disabled=(current_page >= total_pages - 1), use_container_width=True):
+        if st.button("下一页 ▶", key=f"{page_key}_next", disabled=(current_page >= total_pages - 1), width="stretch"):
             st.session_state[page_key] = current_page + 1
             st.rerun()
 
@@ -438,7 +473,7 @@ def render_blacklist_export_button(db, status: int, fn: str, fs: str, fm: list[s
     
     # 若缓存失效或条件变化，展现渲染生成按钮，阻断底层耗时运算
     if st.session_state.get(cache_hash_key) != current_hash or st.session_state.get(cache_data_key) is None:
-        if st.button(f"⚡ 准备打包下载所有筛选记录（共 {total} 条）", use_container_width=True, key=f"{button_key}_prep"):
+        if st.button(f"⚡ 准备打包下载所有筛选记录（共 {total} 条）", width="stretch", key=f"{button_key}_prep"):
             with st.spinner(SPINNER_EXPORT):
                 base = build_blacklist_query(db, status, fn, fs, major_categories=fm)
                 ordered = apply_blacklist_sort(base, sort_key, sort_asc)
@@ -475,7 +510,7 @@ def render_blacklist_export_button(db, status: int, fn: str, fs: str, fm: list[s
             file_name=f"{filename_prefix}_{stamp}.xlsx",
             mime=MIME_XLSX,
             key=button_key,
-            use_container_width=True
+            width="stretch"
         )
 
 
@@ -505,7 +540,7 @@ def render_single_unit_selector(key_prefix: str, default_val: str = "", label: s
     panel_open = st.session_state.get(panel_open_key, False)
     toggle_label = btn_label if not panel_open else (f"🏫 {current_val or '未选择'} · 点击收起 ▾")
 
-    if st.button(toggle_label, key=toggle_key, use_container_width=True):
+    if st.button(toggle_label, key=toggle_key, width="stretch"):
         st.session_state[panel_open_key] = not panel_open
         st.rerun()
 
@@ -530,7 +565,7 @@ def render_single_unit_selector(key_prefix: str, default_val: str = "", label: s
             if matches:
                 st.caption(f"为您查找到以下 **{len(matches)}** 个相关单位，点击直接录入：")
                 for m in matches:
-                    if st.button(m, key=f"{key_prefix}_match_{m}", use_container_width=True, type="primary"):
+                    if st.button(m, key=f"{key_prefix}_match_{m}", width="stretch", type="primary"):
                         st.session_state[sel_key] = m
                         st.session_state[clear_key] = True
                         st.session_state[panel_open_key] = False
@@ -544,7 +579,7 @@ def render_single_unit_selector(key_prefix: str, default_val: str = "", label: s
                 with st.expander(f"📁 **{cat}** ({len(units)}个院系)"):
                     for u in units:
                         btn_type = "primary" if current_val == u else "secondary"
-                        if st.button(u, key=f"{key_prefix}_btn_{u}", use_container_width=True, type=btn_type):
+                        if st.button(u, key=f"{key_prefix}_btn_{u}", width="stretch", type=btn_type):
                             st.session_state[sel_key] = u
                             st.session_state[panel_open_key] = False
                             st.rerun()

@@ -80,7 +80,7 @@ def _render_import_last_result():
         if res.get("skipped_rows"):
             st.caption("以下为跳过的行（学号为空），可下载后修正再导入。")
             skip_df = pd.DataFrame(res["skipped_rows"])
-            st.dataframe(skip_df.head(20), use_container_width=True, hide_index=True)
+            st.dataframe(skip_df.head(20), width="stretch", hide_index=True)
             if len(res["skipped_rows"]) > 20:
                 st.caption(f"仅展示前 20 行，共 {len(res['skipped_rows'])} 行。")
             buf_skip = BytesIO()
@@ -219,7 +219,7 @@ def _render_import_section(db):
             st.error(str(e))
     if st.session_state.get("admin_import_df") is not None and st.session_state.get("admin_import_filename"):
         st.caption("以下为解析结果前 10 行预览，确认无误后点击「开始导入」。")
-        st.dataframe(st.session_state["admin_import_df"].head(10), use_container_width=True, hide_index=True)
+        st.dataframe(st.session_state["admin_import_df"].head(10), width="stretch", hide_index=True)
         if st.button("开始导入", key="admin_import_btn"):
             _handle_import_confirm(db)
 
@@ -445,9 +445,9 @@ def _render_edit_form_section():
             
         col_save, col_cancel = st.columns(2)
         with col_save:
-            submit_save = st.button("保存修改", key="btn_save_edit", use_container_width=True, type="primary")
+            submit_save = st.button("保存修改", key="btn_save_edit", width="stretch", type="primary")
         with col_cancel:
-            submit_cancel = st.button("取消", key="btn_cancel_edit", use_container_width=True)
+            submit_cancel = st.button("取消", key="btn_cancel_edit", width="stretch")
             
         if submit_save:
             _try_save_edit_form(edit_db, rec, edit_id, edit_name, edit_major, edit_reason_text, edit_reason_file, edit_date, edit_impact_start, edit_impact_end)

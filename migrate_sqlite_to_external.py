@@ -70,7 +70,10 @@ def main():
                         student_id=b.student_id,
                         major=b.major,
                         reason=b.reason,
+                        reason_text=b.reason_text,
                         punishment_date=b.punishment_date,
+                        impact_start_date=b.impact_start_date,
+                        impact_end_date=b.impact_end_date,
                         status=b.status,
                         created_at=b.created_at,
                     )

@@ -1,8 +1,7 @@
 """
 教师端页面：学术诚信档案查询（只读）、批量智能比对、个人操作记录。
-单条查询支持姓名或学号（可多行/「姓名 学号」一次查多人）；批量比对支持上传 Excel、命中/未命中报告。
+单条查询支持姓名/学号、拼音/首字母，以及多人批量输入；批量比对支持上传 Excel、命中/未命中报告。
 """
-import re
 from io import BytesIO
 
 import pandas as pd
@@ -30,16 +29,23 @@ from core.config import (
     TITLE_TEACHER,
     TERM_DISHONEST_RECORD,
 )
-from sqlalchemy import and_, or_, func
 
 from core.database import db_session
 from core.models import AuditLog, Blacklist
+from core.search import (
+    fetch_teacher_candidate_records,
+    MATCH_NAME_EXACT,
+    MATCH_STUDENT_ID_EXACT,
+    normalize_search_input_text,
+    parse_teacher_search_inputs,
+    search_teacher_records,
+)
+from core.search_config import SEARCH_INPUT_MAX_LENGTH
 from views.components import render_simple_pagination, render_blacklist_table
 from datetime import datetime
 from core.utils import (
     REQUIRED_EXCEL_COLUMNS,
     cell_str,
-    clean_student_id,
     log_audit_action,
     parse_batch_check_excel,
     validate_student_id,
@@ -77,7 +83,7 @@ def _render_my_logs():
                 }
                 for r in logs
             ])
-            st.dataframe(log_df, use_container_width=True, hide_index=True)
+            st.dataframe(log_df, width="stretch", hide_index=True)
         except Exception:
             st.error("加载失败，" + MSG_TRY_AGAIN)
 
@@ -136,109 +142,77 @@ def render_teacher_page():
         else:
             _render_my_logs()
 
-
-def _parse_one_line(line: str):
-    """
-    解析一行：若含连续数字（≥6 位）视为学号，拆成 (姓名, 学号)；否则整行作为姓名或学号。
-    返回 (name_part 或 None, id_part 或 None)。两者至少一个非空。
-    """
-    line = line.strip()
-    if not line:
-        return None, None
-    # 找连续数字段（≥6 位）作为学号候选
-    m = re.search(r"\d{6,}", line)
-    if m:
-        id_raw = m.group()
-        name_part = (line[: m.start()] + line[m.end() :]).strip()
-        name_part = " ".join(name_part.split())  # 多余空白压成单空格
-        id_clean = clean_student_id(id_raw)
-        if id_clean:
-            return (name_part if name_part else None, id_clean)
-    # 无 ≥6 位连续数字：清洗后与原文一致说明无空白/全角变换，视为纯姓名
-    clean = clean_student_id(line)
-    if clean == line:
-        return (line, None)
-    # 清洗后有变化且非空，视为学号（含空白或全角数字）；否则视为姓名
-    if clean:
-        return (None, clean)
-    return (line, None)
-
 def _render_single_search():
-    """单条查询：支持「姓名 工号/学号」、纯姓名、纯工号/学号；每行一人，可多行查多人。"""
+    """单条查询：支持中文姓名、学号/工号、拼音/首字母；多人请用显式分隔符。"""
     with st.form("teacher_single_search_form"):
         search_input = st.text_area(
             f"请输入姓名或{LABEL_STUDENT_ID}",
             key="teacher_search",
-            placeholder=f"每行一人，可写「姓名 {LABEL_STUDENT_ID}」或仅姓名/仅{LABEL_STUDENT_ID}",
-            height=100,
+            placeholder=(
+                f"支持姓名、拼音全拼、拼音首字母、{LABEL_STUDENT_ID}\n"
+                f"多人请用换行、逗号、顿号或分号分隔；如需联合检索可写「姓名 {LABEL_STUDENT_ID}」"
+            ),
+            height=120,
+            max_chars=SEARCH_INPUT_MAX_LENGTH,
         )
         search_clicked = st.form_submit_button("查询")
 
     if not search_clicked:
         return
 
-    raw_text = (search_input or "").strip()
+    raw_text = normalize_search_input_text(search_input)
     if not raw_text:
         st.error(f"请输入姓名或{LABEL_STUDENT_ID}后再查询。")
         return
 
-    # 先按换行拆成行（每行一人），逗号、顿号也视为换行
-    for sep in (",", "，", "、"):
-        raw_text = raw_text.replace(sep, "\n")
-    lines = [ln.strip() for ln in raw_text.split("\n") if ln.strip()]
-    if not lines:
+    parsed_inputs = parse_teacher_search_inputs(raw_text)
+    if not parsed_inputs:
         st.error(f"请输入至少一个姓名或{LABEL_STUDENT_ID}。")
         return
 
-    # 解析每行为 (name, id) 或 (name, None) 或 (None, id)
-    parsed = []
-    for ln in lines:
-        name_part, id_part = _parse_one_line(ln)
-        if name_part is None and id_part is None:
-            continue
-        if id_part and len(id_part) >= 6:
-            ok, err = validate_student_id(id_part)
+    for item in parsed_inputs:
+        if item.student_id:
+            ok, err = validate_student_id(item.student_id)
             if not ok:
                 st.error(err or f"{LABEL_STUDENT_ID}格式有误，请检查后重试。")
                 return
-        parsed.append((name_part, id_part))
-
-    if not parsed:
-        st.error(f"请输入至少一个有效的姓名或{LABEL_STUDENT_ID}。")
-        return
 
     with db_session() as db:
         try:
             with st.spinner("正在查询..."):
-                # 将多条件合并为单次 OR 查询，避免 N+1
-                conditions = []
-                for name_part, id_part in parsed:
-                    if name_part is not None and id_part is not None:
-                        name_clean = "".join(name_part.split())
-                        conditions.append(and_(func.replace(Blacklist.name, ' ', '') == name_clean, Blacklist.student_id == id_part))
-                    elif id_part is not None:
-                        conditions.append(Blacklist.student_id == id_part)
-                    else:
-                        name_clean = "".join(name_part.split())
-                        conditions.append(func.replace(Blacklist.name, ' ', '') == name_clean)
-                results = db.query(Blacklist).filter(Blacklist.status == 1, or_(*conditions)).all()
-                seen_sids = set()
-                unique_records = []
-                for r in results:
-                    if r.student_id not in seen_sids:
-                        seen_sids.add(r.student_id)
-                        unique_records.append(r)
+                candidate_records = fetch_teacher_candidate_records(
+                    db,
+                    parsed_inputs,
+                    status=1,
+                )
+                unique_records, matched_modes = search_teacher_records(candidate_records, parsed_inputs)
         except Exception:
             st.error("查询失败，" + MSG_TRY_AGAIN)
             return
 
-    log_audit_action(AUDIT_QUERY_SINGLE, target="", details=f"查询 {len(parsed)} 人，命中 {len(unique_records)} 人")
+    log_audit_action(
+        AUDIT_QUERY_SINGLE,
+        target="",
+        details=f"查询 {len(parsed_inputs)} 人，命中 {len(unique_records)} 人",
+    )
 
     if not unique_records:
         st.success(MSG_NO_RECORD_GOOD)
         return
 
-    st.error(f"共查 {len(parsed)} 人，命中 {len(unique_records)} 条{TERM_DISHONEST_RECORD}，请核实。")
+    non_exact_modes = {
+        mode
+        for mode in matched_modes
+        if not (
+            mode == MATCH_STUDENT_ID_EXACT
+            or mode.endswith(f"+{MATCH_NAME_EXACT}")
+            or mode == MATCH_NAME_EXACT
+        )
+    }
+    if non_exact_modes:
+        st.info("当前结果包含模糊或拼音匹配，请结合学号/工号进一步核实。")
+
+    st.error(f"共查 {len(parsed_inputs)} 人，命中 {len(unique_records)} 条{TERM_DISHONEST_RECORD}，请核实。")
     render_blacklist_table(unique_records, page_size=max(1, len(unique_records)), current_page=0)
 
 
@@ -369,7 +343,7 @@ def _render_batch_check():
         batch_table = pd.DataFrame(page_data)
         st.dataframe(
             batch_table, 
-            use_container_width=True, 
+            width="stretch", 
             hide_index=True,
             column_config={
                 "学号": st.column_config.TextColumn(
@@ -419,7 +393,7 @@ def _render_batch_check():
                 st.session_state["teacher_batch_unmatched_page"] = 0
                 st.rerun()
         unmatched_table = pd.DataFrame([{c: d.get(c, "") for c in REQUIRED_EXCEL_COLUMNS} for d in page_data_u])
-        st.dataframe(unmatched_table, use_container_width=True, hide_index=True)
+        st.dataframe(unmatched_table, width="stretch", hide_index=True)
         render_simple_pagination("teacher_batch_unmatched_page", current_page_u, total_pages_u, len(page_data_u))
     else:
         st.caption("名单内全部命中，无未命中人员。")

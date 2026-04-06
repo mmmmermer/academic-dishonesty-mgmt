@@ -31,7 +31,7 @@ def _render_user_list(users):
             for u in users
         ]
     )
-    st.dataframe(user_df, use_container_width=True, hide_index=True)
+    st.dataframe(user_df, width="stretch", hide_index=True)
 
 
 def _try_add_user(db, uname, pwd, fname, new_role):
