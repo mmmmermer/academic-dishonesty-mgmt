@@ -10,7 +10,8 @@ from core.search import (
 )
 from core.search_config import SEARCH_INPUT_MAX_LENGTH
 from views.components import render_blacklist_table
-from core.utils import validate_student_id, log_audit_action
+from core.student_id import validate_student_id
+from core.audit_logger import log_audit_action
 from core.config import (
     AUDIT_QUERY_SINGLE,
     LABEL_STUDENT_ID,

@@ -37,7 +37,7 @@ from core.search import (
     split_search_terms,
     split_student_id_terms,
 )
-from core.utils import sanitize_for_export
+from core.excel_processor import sanitize_for_export
 
 
 def _like_escape(s: str) -> str:

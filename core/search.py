@@ -20,7 +20,7 @@ from core.search_config import (
     SEARCH_TERM_MAX_COUNT,
     TEACHER_TERM_CANDIDATE_LIMIT,
 )
-from core.utils import clean_student_id
+from core.student_id import clean_student_id
 
 try:
     from pypinyin import Style, lazy_pinyin

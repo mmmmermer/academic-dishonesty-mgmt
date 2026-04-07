@@ -11,7 +11,10 @@ import streamlit as st
 
 from core.models import Blacklist
 from core.search import sync_blacklist_record_search_helper_fields
-from core.utils import sanitize_for_export, clean_student_id, safe_filename, remove_old_pdf, log_audit_action, _PDF_DIR
+from core.excel_processor import sanitize_for_export
+from core.student_id import clean_student_id
+from core.file_safe_guard import safe_filename, remove_old_pdf, _PDF_DIR
+from core.audit_logger import log_audit_action
 from core.config import (
     AUDIT_EXPORT,
     CAPTION_FILTER_BY_NAME_SID_MAJOR, EMPTY_NO_EFFECTIVE,

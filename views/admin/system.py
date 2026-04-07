@@ -25,7 +25,7 @@ from core.config import (
 )
 from core.database import IS_SQLITE, db_session
 from core.models import AuditLog
-from core.utils import log_audit_action
+from core.audit_logger import log_audit_action
 from views.components import EXPORT_BATCH_SIZE, EXPORT_MAX_ROWS, SPINNER_EXPORT
 
 logger = logging.getLogger(__name__)

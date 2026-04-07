@@ -43,17 +43,10 @@ from core.config import (
 from core.database import db_session
 from core.models import Blacklist
 from core.search import sync_blacklist_record_search_helper_fields
-from core.utils import (
-    REQUIRED_EXCEL_COLUMNS,
-    _PDF_DIR,
-    cell_str,
-    clean_student_id,
-    log_audit_action,
-    parse_blacklist_excel,
-    remove_old_pdf,
-    safe_filename,
-    validate_student_id,
-)
+from core.excel_processor import REQUIRED_EXCEL_COLUMNS, cell_str, parse_blacklist_excel
+from core.file_safe_guard import _PDF_DIR, remove_old_pdf, safe_filename
+from core.student_id import clean_student_id, validate_student_id
+from core.audit_logger import log_audit_action
 from views.components import (
     apply_blacklist_sort,
     build_blacklist_query,

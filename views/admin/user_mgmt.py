@@ -18,7 +18,7 @@ from core.config import (
 )
 from core.models import User
 from core.session_store import delete_sessions_for_user
-from core.utils import log_audit_action
+from core.audit_logger import log_audit_action
 
 
 def _render_user_list(users):

@@ -37,7 +37,7 @@ from core.config import (
 from core.database import db_session
 from core.models import User
 from core.session_store import create_session, get_login_fails, record_login_fail, clear_login_fail
-from core.utils import log_audit_action
+from core.audit_logger import log_audit_action
 
 
 def render_login_page():
