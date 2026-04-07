@@ -25,7 +25,7 @@ from core.config import (
 )
 from core.database import IS_SQLITE, db_session
 from core.models import AuditLog
-from core.utils import DATABASE_PATH, get_db_file_bytes, log_audit_action
+from core.utils import log_audit_action
 from views.components import EXPORT_BATCH_SIZE, EXPORT_MAX_ROWS, SPINNER_EXPORT
 
 logger = logging.getLogger(__name__)
@@ -145,68 +145,8 @@ def _render_audit_log_section(db):
         st.error("加载审计日志失败，" + MSG_TRY_AGAIN)
 
 
-def _render_db_backup_section():
-    st.subheader("数据库备份下载")
-    try:
-        db_bytes = get_db_file_bytes()
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        st.download_button(label="下载当前数据库 (.db)", data=db_bytes, file_name=f"database_{stamp}.db", mime="application/octet-stream", key="admin_download_db")
-    except NotImplementedError:
-        st.info("当前使用 MySQL/PostgreSQL，不支持在此下载 .db 文件。请使用 mysqldump 或 pg_dump 在服务器上备份。")
-    except FileNotFoundError as e:
-        st.error(str(e))
-    except OSError:
-        st.error(MSG_DB_READ_FAIL)
-
-
-def _render_db_restore_section():
-    st.subheader("⚡️ 危险操作：数据恢复")
-    if not IS_SQLITE:
-        st.info("当前使用 MySQL/PostgreSQL，不支持在此上传 .db 恢复。请使用 mysql/pg 客户端或备份工具从备份恢复。")
-        return
-    restore_uploaded = st.file_uploader("上传备份文件以覆盖当前数据库", type=["db"], key="admin_restore_upload")
-    if not restore_uploaded:
-        return
-    st.warning("此操作将**覆盖**当前数据库，所有未备份的修改将丢失。")
-    restore_confirm_checked = st.checkbox("我已知晓将覆盖当前数据，确认执行恢复", key="admin_restore_confirm_check")
-    if not restore_confirm_checked:
-        st.caption(CAPTION_CONFIRM_RESTORE_DB)
-        return
-    if not st.button("🔴 确认恢复", key="admin_confirm_restore"):
-        return
-    try:
-        backup_bytes = restore_uploaded.read()
-        if not backup_bytes:
-            st.error(MSG_UPLOAD_EMPTY)
-        elif not backup_bytes.startswith(b"SQLite format 3\x00"):
-            st.error("上传的文件不是有效的 SQLite 数据库文件！为了安全已拒绝恢复。")
-        else:
-            with open(DATABASE_PATH, "wb") as f:
-                f.write(backup_bytes)
-            st.cache_resource.clear()
-            st.cache_data.clear()
-            log_audit_action(AUDIT_BACKUP, target="数据恢复", details=f"从文件 {restore_uploaded.name} 恢复")
-            logger.info("数据库恢复完成 文件=%s", restore_uploaded.name)
-            st.success(SUCCESS_DB_RESTORED)
-            st.caption("数据已写入。若未看到更新请刷新或重启应用以使连接加载新数据。")
-            st.balloons()
-            time.sleep(2)
-            st.rerun()
-    except OSError:
-        st.error(MSG_DB_RESTORE_FAIL)
-    except Exception:
-        st.error("恢复过程出错，" + MSG_TRY_AGAIN_OR_ADMIN)
-
-
 def _render_system(db):
-    """系统维护：审计日志 + 数据库备份恢复。"""
+    """系统维护：审计日志。"""
     _render_audit_log_section(db)
-    with st.expander("▶ 数据库备份与恢复", expanded=False):
-        # 自动备份失败告警
-        backup_error = st.session_state.get("auto_backup_error")
-        if backup_error:
-            st.error(f"⚠️ **上次自动备份异常**：{backup_error}。请检查磁盘空间与目录权限。", icon="🚨")
-        st.caption("下载当前数据库或上传备份文件覆盖恢复；恢复为危险操作，请谨慎。")
-        _render_db_backup_section()
-        st.divider()
-        _render_db_restore_section()
+    with st.expander("▶ 数据库备份与灾备", expanded=False):
+        st.info("数据管理已交由 PG 灾备中心流水，本系统不再提供单机版数据库本地热下载与覆盖功能。请利用 pg_dump 执行外围自动化回演与灾备。")

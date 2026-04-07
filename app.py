@@ -118,23 +118,6 @@ def _restore_session_from_sid():
     st.session_state[SESSION_KEY_LAST_ACTIVITY] = time.time()
 
 
-def _run_auto_backup_once():
-    """会话内仅执行一次：将 database.db 备份到 backups/，失败不阻塞启动。"""
-    if st.session_state.get(SESSION_KEY_AUTO_BACKUP_DONE):
-        return
-    try:
-        from core.utils import auto_backup
-        auto_backup()
-        st.session_state[SESSION_KEY_AUTO_BACKUP_DONE] = True
-        # 清除上次的报错（如果有）
-        st.session_state.pop("auto_backup_error", None)
-    except Exception as e:
-        st.session_state[SESSION_KEY_AUTO_BACKUP_DONE] = True  # 不重试，避免循环崩溃
-        st.session_state["auto_backup_error"] = f"自动备份失败：{e!s}"
-        import logging
-        logging.getLogger(__name__).error("自动备份失败: %s", e)
-
-
 def _init_session_state():
     """初始化会话键，避免 KeyError；键名使用 config 常量便于维护。"""
     defaults = [
@@ -249,7 +232,6 @@ def main():
     sidebar_state = "expanded" if st.session_state.get(SESSION_KEY_LOGGED_IN) else "collapsed"
     st.set_page_config(page_title="学术失信人员管理系统", layout="wide", initial_sidebar_state=sidebar_state)
     try:
-        _run_auto_backup_once()
         _inject_watermark()
         # 仅登录后渲染侧栏导航，登录页不显示左侧栏内容
         if st.session_state.get(SESSION_KEY_LOGGED_IN):
