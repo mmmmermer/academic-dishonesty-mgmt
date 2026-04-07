@@ -14,8 +14,8 @@ import time
 
 import threading
 
-# 进程内线程锁（防御 Streamlit 单进程多线程并发）
-_session_lock = threading.Lock()
+# 进程内线程锁（防御 Streamlit 单进程多线程并发）保护所有的非纯读操作及隐式写操作
+_session_lock = threading.RLock()
 
 # 非 Windows 平台使用 fcntl 做跨进程文件锁；Windows 用 msvcrt 模拟
 if sys.platform != "win32":
@@ -153,28 +153,31 @@ def get_session(token: str) -> dict | None:
     """
     if not token:
         return None
-    sessions = _load_sessions()
-    return sessions.get(token)
+    with _session_lock:
+        sessions = _load_sessions()
+        return sessions.get(token)
 
 
 def delete_session(token: str):
     """登出时删除该 token。"""
     if not token:
         return
-    sessions = _load_sessions()
-    if token in sessions:
-        del sessions[token]
-        _save_sessions(sessions)
+    with _session_lock:
+        sessions = _load_sessions()
+        if token in sessions:
+            del sessions[token]
+            _save_sessions(sessions)
 
 
 def delete_sessions_for_user(username: str):
     """清理指定用户的所有活跃 Session（例如禁用、改密等操作时调用）。"""
     if not username:
         return
-    sessions = _load_sessions()
-    valid = {k: v for k, v in sessions.items() if v.get("username") != username}
-    if len(valid) != len(sessions):
-        _save_sessions(valid)
+    with _session_lock:
+        sessions = _load_sessions()
+        valid = {k: v for k, v in sessions.items() if v.get("username") != username}
+        if len(valid) != len(sessions):
+            _save_sessions(valid)
 
 
 # 全局登录失败控制
@@ -219,7 +222,8 @@ def record_login_fail(username: str):
 
 
 def clear_login_fail(username: str):
-    fails = _load_login_fails()
-    if username in fails:
-        del fails[username]
-        _save_login_fails(fails)
+    with _session_lock:
+        fails = _load_login_fails()
+        if username in fails:
+            del fails[username]
+            _save_login_fails(fails)

@@ -161,6 +161,7 @@ def _render_cart_panel(all_filtered_query=None, total_filtered=0):
                     msg = f"✅ 已加入 {added} 条"
                     if skipped:
                         msg += f"，跳过 {skipped} 条（已在暂存区）"
+                    log_audit_action(AUDIT_EXPORT, target="全量入区检索结果", details=msg)
                     st.toast(msg)
                     st.rerun()
 
@@ -263,8 +264,11 @@ def _show_edit_dialog(edit_id):
                 st.rerun()
             except Exception:
                 db.rollback()
-                if edit_reason_file is not None and 'rec' in locals() and getattr(rec, 'reason', None):
-                    remove_old_pdf(rec.reason)
+                if edit_reason_file is not None and 'file_path' in locals() and os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                    except OSError:
+                        pass
                 st.error("保存失败，" + MSG_TRY_AGAIN)
 
 

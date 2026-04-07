@@ -408,8 +408,11 @@ def log_audit_action(action_type: str, target: str = "", details: str = ""):
         try:
             name = st.session_state.get(SESSION_KEY_USER_NAME, "未知")
             username = st.session_state.get(SESSION_KEY_USERNAME, "")
+            # [H4 & M2] 确保能在操作人列体现具体账号，解决重名溯源问题，同时不破坏旧版 schema
+            operator_full = f"{name} ({username})" if username else name
+            
             log = AuditLog(
-                operator_name=name,
+                operator_name=operator_full[:64],
                 operator_username=username or None,
                 action_type=action_type,
                 target=target[:256] if target else None,

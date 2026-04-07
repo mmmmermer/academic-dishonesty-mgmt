@@ -412,8 +412,11 @@ def _try_save_edit_form(edit_db, rec, edit_id, edit_name, edit_major, edit_reaso
         st.rerun()
     except Exception:
         edit_db.rollback()
-        if edit_reason_file is not None and getattr(rec, 'reason', None):
-            remove_old_pdf(rec.reason)
+        if edit_reason_file is not None and 'file_path' in locals() and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except OSError:
+                pass
         st.error("保存失败，" + MSG_TRY_AGAIN)
         return False
 
