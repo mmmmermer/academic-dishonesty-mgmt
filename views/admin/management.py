@@ -45,6 +45,7 @@ from core.models import Blacklist
 from core.search import sync_blacklist_record_search_helper_fields
 from core.utils import (
     REQUIRED_EXCEL_COLUMNS,
+    _PDF_DIR,
     cell_str,
     clean_student_id,
     log_audit_action,
@@ -81,7 +82,7 @@ def _render_import_last_result():
         if res.get("skipped_rows"):
             st.caption("以下为跳过的行（学号为空），可下载后修正再导入。")
             skip_df = pd.DataFrame(res["skipped_rows"])
-            st.dataframe(skip_df.head(20), width="stretch", hide_index=True)
+            st.dataframe(skip_df.head(20), use_container_width=True, hide_index=True)
             if len(res["skipped_rows"]) > 20:
                 st.caption(f"仅展示前 20 行，共 {len(res['skipped_rows'])} 行。")
             buf_skip = BytesIO()
@@ -222,7 +223,7 @@ def _render_import_section(db):
             st.error(str(e))
     if st.session_state.get("admin_import_df") is not None and st.session_state.get("admin_import_filename"):
         st.caption("以下为解析结果前 10 行预览，确认无误后点击「开始导入」。")
-        st.dataframe(st.session_state["admin_import_df"].head(10), width="stretch", hide_index=True)
+        st.dataframe(st.session_state["admin_import_df"].head(10), use_container_width=True, hide_index=True)
         if st.button("开始导入", key="admin_import_btn"):
             _handle_import_confirm(db)
 
@@ -241,9 +242,9 @@ def _try_manual_add(db, add_name, add_student_id, add_major, add_reason_text, ad
         
     pdf_path = None
     if add_reason_file is not None:
-        os.makedirs(os.path.join("static", "pdfs"), exist_ok=True)
+        os.makedirs(_PDF_DIR, exist_ok=True)
         filename = f"{safe_filename(add_student_id)}_{int(time.time())}.pdf"
-        file_path = os.path.join("static", "pdfs", filename)
+        file_path = os.path.join(_PDF_DIR, filename)
         with open(file_path, "wb") as f:
             f.write(add_reason_file.getvalue())
         pdf_path = f"/app/static/pdfs/{filename}"
@@ -271,6 +272,8 @@ def _try_manual_add(db, add_name, add_student_id, add_major, add_reason_text, ad
             return True
     except Exception:
         db.rollback()
+        if pdf_path:
+            remove_old_pdf(pdf_path)
         st.error("添加失败，" + MSG_TRY_AGAIN_OR_ADMIN)
         return False
 
@@ -388,9 +391,9 @@ def _try_save_edit_form(edit_db, rec, edit_id, edit_name, edit_major, edit_reaso
         if edit_reason_file is not None:
             # 清理旧 PDF（若存在），避免磁盘累积孤儿文件
             old_reason_path = rec.reason
-            os.makedirs(os.path.join("static", "pdfs"), exist_ok=True)
+            os.makedirs(_PDF_DIR, exist_ok=True)
             filename = f"{safe_filename(rec.student_id)}_{int(time.time())}.pdf"
-            file_path = os.path.join("static", "pdfs", filename)
+            file_path = os.path.join(_PDF_DIR, filename)
             with open(file_path, "wb") as f:
                 f.write(edit_reason_file.getvalue())
             rec.reason = f"/app/static/pdfs/{filename}"
@@ -409,6 +412,8 @@ def _try_save_edit_form(edit_db, rec, edit_id, edit_name, edit_major, edit_reaso
         st.rerun()
     except Exception:
         edit_db.rollback()
+        if edit_reason_file is not None and getattr(rec, 'reason', None):
+            remove_old_pdf(rec.reason)
         st.error("保存失败，" + MSG_TRY_AGAIN)
         return False
 
@@ -450,9 +455,9 @@ def _render_edit_form_section():
             
         col_save, col_cancel = st.columns(2)
         with col_save:
-            submit_save = st.button("保存修改", key="btn_save_edit", width="stretch", type="primary")
+            submit_save = st.button("保存修改", key="btn_save_edit", use_container_width=True, type="primary")
         with col_cancel:
-            submit_cancel = st.button("取消", key="btn_cancel_edit", width="stretch")
+            submit_cancel = st.button("取消", key="btn_cancel_edit", use_container_width=True)
             
         if submit_save:
             _try_save_edit_form(edit_db, rec, edit_id, edit_name, edit_major, edit_reason_text, edit_reason_file, edit_date, edit_impact_start, edit_impact_end)

@@ -59,7 +59,8 @@ def _fetch_audit_logs(db, filter_operator, filter_type, use_date_filter, filter_
             return logs, len(logs)
         total_export = base.count()
         return logs[:500], total_export
-    except Exception:
+    except Exception as e:
+        logger.exception("获取审计日志发生异常")
         return None, 0
 
 
@@ -81,7 +82,7 @@ def _render_audit_log_display(logs, total_export, db, filter_operator, filter_ty
     log_df = pd.DataFrame(
         [{"ID": r.id, "操作人": r.operator_name, "类型": AUDIT_TYPE_NAMES.get(r.action_type, r.action_type), "对象": r.target or "", "详情": (r.details or "")[:100], "时间": str(r.timestamp)} for r in logs]
     )
-    st.dataframe(log_df, width="stretch", hide_index=True)
+    st.dataframe(log_df, use_container_width=True, hide_index=True)
     st.caption(f"表格展示 {len(logs)} 条（最多 500 条）；导出为当前筛选结果，共 {total_export} 条（最多导出 {EXPORT_MAX_ROWS} 条）。")
 
     # 惰性导出：先显示"准备导出"按钮，点击后查询并缓存，再显示下载按钮
@@ -90,7 +91,7 @@ def _render_audit_log_display(logs, total_export, db, filter_operator, filter_ty
     cache_data_key = "audit_export_data"
 
     if st.session_state.get(cache_hash_key) != current_hash or st.session_state.get(cache_data_key) is None:
-        if st.button(f"⚡ 准备导出审计日志（共 {total_export} 条）", width="stretch", key="audit_prep_export"):
+        if st.button(f"⚡ 准备导出审计日志（共 {total_export} 条）", use_container_width=True, key="audit_prep_export"):
             with st.spinner(SPINNER_EXPORT):
                 logs_export = _fetch_audit_logs_export_batched(db, filter_operator, filter_type, use_date_filter, filter_date)
             if not logs_export:
@@ -114,7 +115,7 @@ def _render_audit_log_display(logs, total_export, db, filter_operator, filter_ty
             file_name=f"审计日志_{stamp}.xlsx",
             mime=MIME_XLSX,
             key="audit_export_xlsx",
-            width="stretch"
+            use_container_width=True
         )
 
 
@@ -177,6 +178,8 @@ def _render_db_restore_section():
         backup_bytes = restore_uploaded.read()
         if not backup_bytes:
             st.error(MSG_UPLOAD_EMPTY)
+        elif not backup_bytes.startswith(b"SQLite format 3\x00"):
+            st.error("上传的文件不是有效的 SQLite 数据库文件！为了安全已拒绝恢复。")
         else:
             with open(DATABASE_PATH, "wb") as f:
                 f.write(backup_bytes)

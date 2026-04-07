@@ -167,10 +167,8 @@ def render_list_controls(key_prefix: str, sort_columns=None, page_size_options=N
     page_size = st.session_state.get(ps_key, LIST_PAGE_SIZE)
     if page_size not in page_size_options:
         page_size = LIST_PAGE_SIZE
-    if sort_key_k not in st.session_state:
-        st.session_state[sort_key_k] = "工号/学号"
-    if order_key not in st.session_state:
-        st.session_state[order_key] = SORT_ORDER_ASC
+    sort_col_val = st.session_state.get(sort_key_k, "工号/学号")
+    order_val = st.session_state.get(order_key, SORT_ORDER_ASC)
 
     # 注入 CSS 魔术：抹除弹窗内 Expander 边框，收紧间距，强制拉宽面板以防折行
     st.markdown("""
@@ -251,11 +249,15 @@ def render_list_controls(key_prefix: str, sort_columns=None, page_size_options=N
         fs = st.text_input("学号/工号筛选", key=f"{key_prefix}_fs", placeholder=PLACEHOLDER_FILTER_EMPTY)
     with c_settings:
         st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
-        with st.popover("⚙️ 列表设置", width="stretch"):
+        with st.popover("⚙️ 列表设置", use_container_width=True):
             idx = page_size_options.index(page_size) if page_size in page_size_options else 0
             page_size = st.selectbox(LABEL_PAGE_SIZE, page_size_options, index=idx, key=ps_key)
-            sort_key = st.selectbox(LABEL_SORT_COLUMN, sort_columns, key=sort_key_k)
-            sort_order = st.radio(LABEL_SORT_ORDER, SORT_ORDER_OPTIONS, key=order_key, horizontal=True)
+            
+            s_idx = sort_columns.index(sort_col_val) if sort_col_val in sort_columns else 0
+            sort_key = st.selectbox(LABEL_SORT_COLUMN, sort_columns, index=s_idx, key=sort_key_k)
+            
+            r_idx = SORT_ORDER_OPTIONS.index(order_val) if order_val in SORT_ORDER_OPTIONS else 0
+            sort_order = st.radio(LABEL_SORT_ORDER, SORT_ORDER_OPTIONS, index=r_idx, key=order_key, horizontal=True)
 
     # 高级单位筛选（第二行，拉长外层选择框，合适尺度）
     c_unit, _ = st.columns([5.5, 5.5])
@@ -276,7 +278,7 @@ def render_list_controls(key_prefix: str, sort_columns=None, page_size_options=N
         fm = []
         
         st.markdown("<div style='font-size:14px;margin-bottom:6px;opacity:0.8'>单位精准筛选 (点击下方展开面板)</div>", unsafe_allow_html=True)
-        with st.popover(btn_label, width="stretch"):
+        with st.popover(btn_label, use_container_width=True):
             with st.container(height=320, border=False):
                 # 优先渲染常规类别
                 for cat, units in UNIT_CATEGORY_MAP.items():
@@ -367,7 +369,7 @@ def render_blacklist_table(records, page_size: int, current_page: int, selection
         
     event = st.dataframe(
         df,
-        width="stretch",
+        use_container_width=True,
         hide_index=True,
         height=computed_height,
         column_config={
@@ -397,7 +399,7 @@ def render_pagination(page_key: str, current_page: int, total_pages: int, total_
     # 主翻页行：上一页 | 页码 & 跳转 | 下一页
     c_prev, c_mid, c_next = st.columns([1, 3, 1])
     with c_prev:
-        if st.button("◀ 上一页", key=f"{page_key}_prev", disabled=(current_page <= 0), width="stretch"):
+        if st.button("◀ 上一页", key=f"{page_key}_prev", disabled=(current_page <= 0), use_container_width=True):
             st.session_state[page_key] = current_page - 1
             st.rerun()
     with c_mid:
@@ -415,11 +417,11 @@ def render_pagination(page_key: str, current_page: int, total_pages: int, total_
                 value=current_page + 1, key=f"{page_key}_jump", label_visibility="collapsed",
             )
         with jc3:
-            if st.button("Go", key=f"{page_key}_go", width="stretch") and 1 <= jump <= total_pages:
+            if st.button("Go", key=f"{page_key}_go", use_container_width=True) and 1 <= jump <= total_pages:
                 st.session_state[page_key] = int(jump) - 1
                 st.rerun()
     with c_next:
-        if st.button("下一页 ▶", key=f"{page_key}_next", disabled=(current_page >= total_pages - 1), width="stretch"):
+        if st.button("下一页 ▶", key=f"{page_key}_next", disabled=(current_page >= total_pages - 1), use_container_width=True):
             st.session_state[page_key] = current_page + 1
             st.rerun()
 
@@ -478,7 +480,7 @@ def render_blacklist_export_button(db, status: int, fn: str, fs: str, fm: list[s
     
     # 若缓存失效或条件变化，展现渲染生成按钮，阻断底层耗时运算
     if st.session_state.get(cache_hash_key) != current_hash or st.session_state.get(cache_data_key) is None:
-        if st.button(f"⚡ 准备打包下载所有筛选记录（共 {total} 条）", width="stretch", key=f"{button_key}_prep"):
+        if st.button(f"⚡ 准备打包下载所有筛选记录（共 {total} 条）", use_container_width=True, key=f"{button_key}_prep"):
             with st.spinner(SPINNER_EXPORT):
                 base = build_blacklist_query(db, status, fn, fs, major_categories=fm)
                 ordered = apply_blacklist_sort(base, sort_key, sort_asc)
@@ -515,7 +517,7 @@ def render_blacklist_export_button(db, status: int, fn: str, fs: str, fm: list[s
             file_name=f"{filename_prefix}_{stamp}.xlsx",
             mime=MIME_XLSX,
             key=button_key,
-            width="stretch"
+            use_container_width=True
         )
 
 
@@ -545,7 +547,7 @@ def render_single_unit_selector(key_prefix: str, default_val: str = "", label: s
     panel_open = st.session_state.get(panel_open_key, False)
     toggle_label = btn_label if not panel_open else (f"🏫 {current_val or '未选择'} · 点击收起 ▾")
 
-    if st.button(toggle_label, key=toggle_key, width="stretch"):
+    if st.button(toggle_label, key=toggle_key, use_container_width=True):
         st.session_state[panel_open_key] = not panel_open
         st.rerun()
 
@@ -570,7 +572,7 @@ def render_single_unit_selector(key_prefix: str, default_val: str = "", label: s
             if matches:
                 st.caption(f"为您查找到以下 **{len(matches)}** 个相关单位，点击直接录入：")
                 for m in matches:
-                    if st.button(m, key=f"{key_prefix}_match_{m}", width="stretch", type="primary"):
+                    if st.button(m, key=f"{key_prefix}_match_{m}", use_container_width=True, type="primary"):
                         st.session_state[sel_key] = m
                         st.session_state[clear_key] = True
                         st.session_state[panel_open_key] = False
@@ -584,7 +586,7 @@ def render_single_unit_selector(key_prefix: str, default_val: str = "", label: s
                 with st.expander(f"📁 **{cat}** ({len(units)}个院系)"):
                     for u in units:
                         btn_type = "primary" if current_val == u else "secondary"
-                        if st.button(u, key=f"{key_prefix}_btn_{u}", width="stretch", type=btn_type):
+                        if st.button(u, key=f"{key_prefix}_btn_{u}", use_container_width=True, type=btn_type):
                             st.session_state[sel_key] = u
                             st.session_state[panel_open_key] = False
                             st.rerun()

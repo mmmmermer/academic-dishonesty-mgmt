@@ -18,13 +18,14 @@ from .database import DATABASE_DIR, IS_SQLITE, db_session
 from .models import AuditLog
 
 try:
-    from .config import MAX_IMPORT_ROWS, MAX_UPLOAD_FILE_BYTES, SESSION_KEY_USER_NAME, STUDENT_ID_MAX_LEN, STUDENT_ID_MIN_LEN, LABEL_STUDENT_ID
+    from .config import MAX_IMPORT_ROWS, MAX_UPLOAD_FILE_BYTES, SESSION_KEY_USER_NAME, SESSION_KEY_USERNAME, STUDENT_ID_MAX_LEN, STUDENT_ID_MIN_LEN, LABEL_STUDENT_ID
 except ImportError:
     STUDENT_ID_MIN_LEN = 1
     STUDENT_ID_MAX_LEN = 32
     MAX_IMPORT_ROWS = 10000
     MAX_UPLOAD_FILE_BYTES = 10 * 1024 * 1024
     SESSION_KEY_USER_NAME = "user_name"
+    SESSION_KEY_USERNAME = "username"
     LABEL_STUDENT_ID = "工号/学号"
 
 # 数据库文件路径
@@ -359,14 +360,14 @@ def auto_backup() -> str:
     except OSError as e:
         raise OSError(f"复制数据库到备份失败：{e!s}") from e
 
-    # 只保留最新 7 份
+    # 只保留最新 7 份——按文件名排序（含时间戳），不依赖 mtime（L7 修复）
     try:
         backups = [
             os.path.join(BACKUPS_DIR, f)
             for f in os.listdir(BACKUPS_DIR)
             if f.startswith("database_") and f.endswith(".db")
         ]
-        backups.sort(key=os.path.getmtime, reverse=True)
+        backups.sort(reverse=True)  # 文件名含时间戳，字母序 == 时间序
         for old in backups[7:]:
             try:
                 os.remove(old)
@@ -406,13 +407,16 @@ def log_audit_action(action_type: str, target: str = "", details: str = ""):
     with db_session() as db:
         try:
             name = st.session_state.get(SESSION_KEY_USER_NAME, "未知")
+            username = st.session_state.get(SESSION_KEY_USERNAME, "")
             log = AuditLog(
                 operator_name=name,
+                operator_username=username or None,
                 action_type=action_type,
                 target=target[:256] if target else None,
                 details=details[:4096] if details else None,
             )
             db.add(log)
             db.commit()
-        except Exception:
+        except Exception as exc:
             db.rollback()
+            _logger.warning("审计日志写入失败 action=%s target=%s: %s", action_type, target[:64] if target else "", exc)

@@ -7,6 +7,8 @@ import streamlit as st
 
 from core.config import (
     AUDIT_ADD,
+    AUDIT_RESET_PWD,
+    AUDIT_TOGGLE_USER,
     EMPTY_NO_USER,
     MSG_TRY_AGAIN,
     PASSWORD_MIN_LEN,
@@ -31,7 +33,7 @@ def _render_user_list(users):
             for u in users
         ]
     )
-    st.dataframe(user_df, width="stretch", hide_index=True)
+    st.dataframe(user_df, use_container_width=True, hide_index=True)
 
 
 def _try_add_user(db, uname, pwd, fname, new_role):
@@ -101,7 +103,7 @@ def _render_reset_password_section(db, users):
             user.password_hash = bcrypt.hashpw(pwd_stripped.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
             db.commit()
             delete_sessions_for_user(user.username)
-            log_audit_action(AUDIT_ADD, target=f"密码重置 {user.username}", details="")
+            log_audit_action(AUDIT_RESET_PWD, target=f"密码重置 {user.username}", details="")
             st.success(SUCCESS_PWD_RESET)
             st.rerun()
     except Exception:
@@ -130,7 +132,7 @@ def _render_toggle_user_section(db, users):
             if not target_user.is_active:
                 delete_sessions_for_user(target_user.username)
             status = "启用" if target_user.is_active else "禁用"
-            log_audit_action(AUDIT_ADD, target=f"账号{status} {target_user.username}", details="")
+            log_audit_action(AUDIT_TOGGLE_USER, target=f"账号{status} {target_user.username}", details="")
             st.success(f"已{status} {target_user.username}。")
             st.rerun()
     except Exception:

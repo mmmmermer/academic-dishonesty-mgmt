@@ -88,6 +88,7 @@ def main():
                 dst_session.add(
                     AuditLog(
                         operator_name=a.operator_name,
+                        operator_username=a.operator_username,
                         action_type=a.action_type,
                         target=a.target,
                         details=a.details,

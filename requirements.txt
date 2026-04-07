@@ -1,12 +1,11 @@
 streamlit
 sqlalchemy
-alembic
 bcrypt
 pandas
 pypinyin
 openpyxl
 xlrd
-plotly
+
 # 阶段一：按需安装其一，用于连接 MySQL 或 PostgreSQL（不使用时可不装）
 pymysql
 psycopg2-binary

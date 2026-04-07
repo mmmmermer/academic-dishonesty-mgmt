@@ -12,14 +12,24 @@ import secrets
 import sys
 import time
 
-# 非 Windows 平台使用 fcntl 做跨进程文件锁；Windows 下多实例少见，暂不加锁
+import threading
+
+# 进程内线程锁（防御 Streamlit 单进程多线程并发）
+_session_lock = threading.Lock()
+
+# 非 Windows 平台使用 fcntl 做跨进程文件锁；Windows 用 msvcrt 模拟
 if sys.platform != "win32":
     try:
         import fcntl
     except ImportError:
         fcntl = None
+    msvcrt = None
 else:
     fcntl = None
+    try:
+        import msvcrt
+    except ImportError:
+        msvcrt = None
 
 # 与 database 同目录，便于备份时一起处理
 # 向上跳一级：从 core/ 目录到项目根目录
@@ -37,28 +47,49 @@ TOKEN_EXPIRY_SECONDS = SESSION_TIMEOUT_MINUTES * 60
 
 
 def _lock_shared(f):
-    """对已打开的文件加共享锁（读锁）；仅非 Windows 且 fcntl 可用时执行。"""
+    """对文件加共享读锁"""
     if fcntl and f is not None:
         try:
             fcntl.flock(f.fileno(), fcntl.LOCK_SH)
         except (OSError, AttributeError):
             pass
+    elif msvcrt and f is not None:
+        try:
+            import contextlib
+            with contextlib.suppress(OSError):
+                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, max(os.path.getsize(f.name), 1))
+        except (OSError, AttributeError):
+            pass
 
 
 def _lock_exclusive(f):
-    """对已打开的文件加排他锁（写锁）；仅非 Windows 且 fcntl 可用时执行。"""
+    """对文件加排他写锁"""
     if fcntl and f is not None:
         try:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         except (OSError, AttributeError):
             pass
+    elif msvcrt and f is not None:
+        try:
+            import contextlib
+            with contextlib.suppress(OSError):
+                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, max(os.path.getsize(f.name) if os.path.exists(f.name) else 1, 1))
+        except (OSError, AttributeError):
+            pass
 
 
 def _unlock(f):
-    """释放文件锁。"""
+    """释放锁"""
     if fcntl and f is not None:
         try:
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except (OSError, AttributeError):
+            pass
+    elif msvcrt and f is not None:
+        try:
+            import contextlib
+            with contextlib.suppress(OSError):
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, max(os.path.getsize(f.name), 1))
         except (OSError, AttributeError):
             pass
 
@@ -102,15 +133,16 @@ def create_session(user_id: int, username: str, role: str, full_name: str) -> st
     调用方需将 token 写入 URL（如 st.query_params["sid"] = token）。
     """
     token = secrets.token_urlsafe(32)
-    sessions = _load_sessions()
-    sessions[token] = {
-        "user_id": user_id,
-        "username": username,
-        "role": role,
-        "full_name": full_name,
-        "expiry": time.time() + TOKEN_EXPIRY_SECONDS,
-    }
-    _save_sessions(sessions)
+    with _session_lock:
+        sessions = _load_sessions()
+        sessions[token] = {
+            "user_id": user_id,
+            "username": username,
+            "role": role,
+            "full_name": full_name,
+            "expiry": time.time() + TOKEN_EXPIRY_SECONDS,
+        }
+        _save_sessions(sessions)
     return token
 
 
@@ -178,10 +210,12 @@ def get_login_fails() -> dict:
 
 
 def record_login_fail(username: str):
-    fails = _load_login_fails()
-    count, _ = fails.get(username, (0, 0.0))
-    fails[username] = (count + 1, time.time())
-    _save_login_fails(fails)
+    """加锁，原子的增加登录失败次数"""
+    with _session_lock:
+        fails = _load_login_fails()
+        count, _ = fails.get(username, (0, 0.0))
+        fails[username] = (count + 1, time.time())
+        _save_login_fails(fails)
 
 
 def clear_login_fail(username: str):

@@ -26,6 +26,7 @@ from core.config import (
     MSG_NO_RECORD_GOOD,
     MSG_TRY_AGAIN,
     SESSION_KEY_USER_NAME,
+    SESSION_KEY_USERNAME,
     TITLE_TEACHER,
     TERM_DISHONEST_RECORD,
 )
@@ -57,8 +58,8 @@ def _render_my_logs():
     """个人记录：展示当前用户最近操作历史（审计日志）。使用 db_session 确保会话关闭。"""
     st.subheader("个人记录")
     st.caption("您最近的操作历史（最多 100 条）。")
-    name = st.session_state.get(SESSION_KEY_USER_NAME, "")
-    if not name:
+    username = st.session_state.get(SESSION_KEY_USERNAME, "")
+    if not username:
         st.caption(EMPTY_CANNOT_GET_USER)
         return
     with db_session() as db:
@@ -66,7 +67,7 @@ def _render_my_logs():
             with st.spinner("加载中..."):
                 logs = (
                     db.query(AuditLog)
-                    .filter(AuditLog.operator_name == name)
+                    .filter(AuditLog.operator_username == username)
                     .order_by(AuditLog.timestamp.desc())
                     .limit(100)
                     .all()
@@ -83,7 +84,7 @@ def _render_my_logs():
                 }
                 for r in logs
             ])
-            st.dataframe(log_df, width="stretch", hide_index=True)
+            st.dataframe(log_df, use_container_width=True, hide_index=True)
         except Exception:
             st.error("加载失败，" + MSG_TRY_AGAIN)
 
@@ -343,7 +344,7 @@ def _render_batch_check():
         batch_table = pd.DataFrame(page_data)
         st.dataframe(
             batch_table, 
-            width="stretch", 
+            use_container_width=True, 
             hide_index=True,
             column_config={
                 "学号": st.column_config.TextColumn(
@@ -393,7 +394,7 @@ def _render_batch_check():
                 st.session_state["teacher_batch_unmatched_page"] = 0
                 st.rerun()
         unmatched_table = pd.DataFrame([{c: d.get(c, "") for c in REQUIRED_EXCEL_COLUMNS} for d in page_data_u])
-        st.dataframe(unmatched_table, width="stretch", hide_index=True)
+        st.dataframe(unmatched_table, use_container_width=True, hide_index=True)
         render_simple_pagination("teacher_batch_unmatched_page", current_page_u, total_pages_u, len(page_data_u))
     else:
         st.caption("名单内全部命中，无未命中人员。")
