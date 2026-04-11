@@ -5,7 +5,8 @@
 import streamlit as st
 
 from core.database import db_session
-from core.config import EMPTY_NO_EFFECTIVE
+from core.config import AUDIT_QUERY_LIST, EMPTY_NO_EFFECTIVE
+from core.audit_logger import log_audit_action
 from views.components import (
     apply_blacklist_sort,
     build_blacklist_query,
@@ -28,6 +29,26 @@ def render_teacher_list_query(db):
     
     base = build_blacklist_query(db, status=1, name_filter=fn, sid_filter=fs, major_categories=fm)
     total = base.count()
+
+    # 审计日志：仅在教师主动使用了筛选条件时记录，且同一组条件不重复记录
+    _has_filter = bool(fn or fs)
+    if _has_filter:
+        _filter_sig = f"{fn}|{fs}|{','.join(sorted(fm))}"
+        if st.session_state.get("_teacher_lq_last_audit") != _filter_sig:
+            _parts = []
+            if fn:
+                _parts.append(f"姓名={fn}")
+            if fs:
+                _parts.append(f"学号={fs}")
+            if fm:
+                _parts.append(f"单位={','.join(fm[:3])}")
+            log_audit_action(
+                AUDIT_QUERY_LIST,
+                target="; ".join(_parts),
+                details=f"命中 {total} 条",
+            )
+            st.session_state["_teacher_lq_last_audit"] = _filter_sig
+
     if total == 0:
         st.caption(EMPTY_NO_EFFECTIVE)
         return
@@ -42,7 +63,7 @@ def render_teacher_list_query(db):
     # 使用 single-row 选择模式（点击行即选中，无复选框列）
     state_sig = f"{page}_{page_size}_{fn}_{fs}_{','.join(sorted(fm))}_{sort_key}_{sort_asc}"
     sel_key = f"teacher_query_sel_{state_sig}"
-    selected = render_blacklist_table(page_records, page_size, page, selection_key=sel_key)
+    selected = render_blacklist_table(page_records, page_size, page, selection_key=sel_key, selection_mode="single-row")
     
     # 分页器（紧跟表格，方便翻页查找）
     render_pagination("teacher_effective_page", page, total_pages, total, len(page_records))

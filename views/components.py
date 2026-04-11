@@ -326,8 +326,8 @@ def render_list_controls(key_prefix: str, sort_columns=None, page_size_options=N
     return (fn or "").strip(), (fs or "").strip(), fm or [], page_size, sort_key, sort_asc
 
 
-def render_blacklist_table(records, page_size: int, current_page: int, selection_key: str | None = None) -> list:
-    """渲染名单表格，支持链接下载与动态时效展示。开启 selection_key 时将带多选框并返回选中的对象。"""
+def render_blacklist_table(records, page_size: int, current_page: int, selection_key: str | None = None, selection_mode: str = "multi-row") -> list:
+    """渲染名单表格，支持链接下载与动态时效展示。开启 selection_key 时将带选择并返回选中的对象。"""
     start = current_page * page_size
     today = datetime.now().date()
     df_data = []
@@ -364,7 +364,7 @@ def render_blacklist_table(records, page_size: int, current_page: int, selection
     kwargs = {}
     if selection_key is not None:
         kwargs["on_select"] = "rerun"
-        kwargs["selection_mode"] = "multi-row"
+        kwargs["selection_mode"] = selection_mode
         kwargs["key"] = selection_key
         
     event = st.dataframe(
