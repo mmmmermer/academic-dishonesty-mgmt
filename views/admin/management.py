@@ -400,7 +400,7 @@ def _try_save_edit_form(edit_db, rec, edit_id, edit_name, edit_major, edit_reaso
         sync_blacklist_record_search_helper_fields(edit_db, rec)
         
         edit_db.commit()
-        log_audit_action(AUDIT_ADD, target=f"编辑记录 {edit_id}", details=f"编辑: {rec.name}({rec.student_id[:8]}***), 单位: {rec.major or '未填'}")
+        log_audit_action(AUDIT_ADD, target=f"{rec.name}({rec.student_id[:8]}***)", details=f"编辑: {rec.name}({rec.student_id[:8]}***), 单位: {rec.major or '未填'}")
         _clear_edit_id()
         st.session_state["_flash_success"] = f"已保存修改：{rec.name}({rec.student_id[:8]}***)"
         st.rerun()

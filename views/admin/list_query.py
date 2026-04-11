@@ -265,7 +265,7 @@ def _show_edit_dialog(edit_id):
                 rec.impact_end_date = edit_impact_end
                 sync_blacklist_record_search_helper_fields(db, rec)
                 db.commit()
-                log_audit_action(AUDIT_ADD, target=f"弹窗编辑 {rec.id}", details=f"编辑: {rec.name}({rec.student_id[:8]}***), 单位: {rec.major or '未填'}")
+                log_audit_action(AUDIT_ADD, target=f"{rec.name}({rec.student_id[:8]}***)", details=f"编辑: {rec.name}({rec.student_id[:8]}***), 单位: {rec.major or '未填'}")
                 st.session_state["_flash_success"] = f"已保存修改：{rec.name}({rec.student_id[:8]}***)"
                 st.rerun()
             except Exception:
