@@ -30,6 +30,20 @@ def render_batch_check():
     """批量智能比对：上传 Excel，按学号与黑名单比对，展示结果并支持下载报告；表格分页每页 10 条。"""
     st.subheader("批量智能比对")
     st.caption(CAPTION_BATCH_INTRO)
+    st.caption("Excel 须包含「学号/工号」列（必填），系统将根据该列与生效名单进行比对。其余列为辅助信息，方便您核对结果。")
+    col_tpl, _ = st.columns([1, 3])
+    with col_tpl:
+        # 模板列名：必填列 + 选填辅助列（选填标注）
+        _TPL_COLUMNS = ["姓名", "学号/工号", "单位（选填）", "原因（选填）", "处分时间（选填）"]
+        tpl_buf = BytesIO()
+        pd.DataFrame(columns=_TPL_COLUMNS).to_excel(tpl_buf, index=False, engine="openpyxl")
+        st.download_button(
+            "📥 下载 Excel 模板",
+            data=tpl_buf.getvalue(),
+            file_name="批量比对模板.xlsx",
+            mime=MIME_XLSX,
+            key="teacher_batch_tpl",
+        )
     uploaded = st.file_uploader("选择 Excel 文件", type=["xlsx", "xls"], key="teacher_batch_file")
     run_batch = st.button("开始比对", key="teacher_batch_btn")
 

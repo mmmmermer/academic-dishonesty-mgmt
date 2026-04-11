@@ -3,7 +3,7 @@
 """
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from io import BytesIO
 
 import pandas as pd
@@ -77,40 +77,6 @@ def _fetch_audit_logs_export_batched(db, filter_operator, filter_type, date_star
         rows.append(row)
     return rows
 
-
-def _render_audit_stats(db):
-    """渲染审计日志统计概览卡片行。"""
-    try:
-        today = datetime.now().date()
-        week_ago = today - timedelta(days=7)
-
-        today_count = db.query(func.count(AuditLog.id)).filter(
-            func.date(AuditLog.timestamp) == str(today)
-        ).scalar() or 0
-
-        week_count = db.query(func.count(AuditLog.id)).filter(
-            func.date(AuditLog.timestamp) >= str(week_ago)
-        ).scalar() or 0
-
-        total_count = db.query(func.count(AuditLog.id)).scalar() or 0
-
-        # 最多操作类型
-        top_type_row = db.query(
-            AuditLog.action_type, func.count(AuditLog.id).label("cnt")
-        ).group_by(AuditLog.action_type).order_by(func.count(AuditLog.id).desc()).first()
-        top_type = AUDIT_TYPE_NAMES.get(top_type_row[0], top_type_row[0]) if top_type_row else "—"
-
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.metric("📊 今日操作", today_count)
-        with c2:
-            st.metric("📈 本周操作", week_count)
-        with c3:
-            st.metric("📋 累计总量", total_count)
-        with c4:
-            st.metric("🔥 最频繁类型", top_type)
-    except Exception:
-        pass  # 统计失败不影响主流程
 
 
 def _render_audit_log_display(logs, total_export, db, filter_operator, filter_type, date_start, date_end):
@@ -186,6 +152,7 @@ def _render_audit_log_display(logs, total_export, db, filter_operator, filter_ty
 
 def _render_audit_log_section(db):
     st.subheader("审计日志")
+    st.caption("可按操作人、操作类型、日期范围单独或组合筛选，留空或选「全部」表示不限制。")
     operator_names = _get_audit_operator_names(db)
     audit_type_display_options = ["全部"] + [AUDIT_TYPE_NAMES.get(t, t) for t in AUDIT_ACTION_TYPES]
     audit_name_to_code = {v: k for k, v in AUDIT_TYPE_NAMES.items()}

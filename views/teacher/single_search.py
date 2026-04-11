@@ -70,7 +70,7 @@ def render_single_search():
 
     # 构建查询摘要用于审计
     _query_names = ", ".join(
-        (p.name or p.student_id or "?")[:10] for p in parsed_inputs[:5]
+        (p.name_query or p.student_id or "?")[:10] for p in parsed_inputs[:5]
     )
     if len(parsed_inputs) > 5:
         _query_names += f" 等{len(parsed_inputs)}人"

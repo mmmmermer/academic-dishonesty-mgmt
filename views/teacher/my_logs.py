@@ -33,7 +33,7 @@ def render_my_logs():
                 return
             log_df = pd.DataFrame([
                 {
-                    "时间": str(r.timestamp),
+                    "时间": r.timestamp.strftime('%Y-%m-%d %H:%M:%S') if r.timestamp else "",
                     "类型": AUDIT_TYPE_NAMES.get(r.action_type, r.action_type),
                     "对象": r.target or "",
                     "详情": (r.details or "")[:80],
