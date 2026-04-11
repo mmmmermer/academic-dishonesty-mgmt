@@ -1,11 +1,11 @@
-streamlit
-sqlalchemy
-bcrypt
-pandas
-pypinyin
-openpyxl
-xlrd
+# 核心依赖（版本锁定，基于当前生产环境实际安装版本）
+streamlit>=1.54,<2.0
+sqlalchemy>=2.0,<2.1
+bcrypt>=5.0,<6.0
+pandas>=2.3,<3.0
+pypinyin>=0.55,<1.0
+openpyxl>=3.1,<4.0
+xlrd>=2.0,<3.0
 
-# 阶段一：按需安装其一，用于连接 MySQL 或 PostgreSQL（不使用时可不装）
-pymysql
-psycopg2-binary
+# PostgreSQL 驱动（生产必装）
+psycopg2-binary>=2.9,<3.0

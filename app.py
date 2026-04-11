@@ -38,7 +38,7 @@ LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), LOG_SUBDIR)
 
 
 def _setup_logging():
-    """配置根 logger：写入 logs/app.log，便于排查问题。"""
+    """配置根 logger：写入 logs/app.log，启用轮转（10MB/份，保留 5 份），防止日志无限膨胀。"""
     try:
         os.makedirs(LOG_DIR, exist_ok=True)
     except OSError:
@@ -46,7 +46,10 @@ def _setup_logging():
     log_file = os.path.join(LOG_DIR, LOG_FILENAME)
     fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     try:
-        handler = logging.FileHandler(log_file, encoding="utf-8")
+        from logging.handlers import RotatingFileHandler
+        handler = RotatingFileHandler(
+            log_file, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+        )
         handler.setFormatter(logging.Formatter(fmt))
         root = logging.getLogger()
         root.setLevel(logging.INFO)
