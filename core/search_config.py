@@ -19,7 +19,7 @@ ADMIN_EXTENDED_RECALL_LIMIT = 20
 # Pinyin thresholds
 PINYIN_ABBR_EXACT_MIN_LEN = 2
 PINYIN_PREFIX_MIN_LEN = 2
-PINYIN_SUBSTRING_MIN_LEN = 3
+PINYIN_SUBSTRING_MIN_LEN = 2
 
 # Match rank ordering: lower is better
 SEARCH_MATCH_RANKS = {
@@ -28,6 +28,7 @@ SEARCH_MATCH_RANKS = {
     "name_partial": 20,
     "pinyin_full": 30,
     "pinyin_abbr": 40,
+    "pinyin_char_exact": 45,
     "pinyin_prefix": 50,
     "pinyin_abbr_prefix": 60,
     "pinyin_substring": 70,

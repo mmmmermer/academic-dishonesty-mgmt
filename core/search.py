@@ -41,6 +41,7 @@ MATCH_PINYIN_FULL = "pinyin_full"
 MATCH_PINYIN_ABBR = "pinyin_abbr"
 MATCH_PINYIN_PREFIX = "pinyin_prefix"
 MATCH_PINYIN_ABBR_PREFIX = "pinyin_abbr_prefix"
+MATCH_PINYIN_CHAR_EXACT = "pinyin_char_exact"
 MATCH_PINYIN_SUBSTRING = "pinyin_substring"
 
 MATCH_RANKS = SEARCH_MATCH_RANKS
@@ -313,16 +314,20 @@ def compute_name_fields(name: str) -> dict[str, str]:
             "name_normalized": name_normalized,
             "name_pinyin": "",
             "name_abbr": "",
+            "name_pinyin_chars": [],
         }
 
     name_pinyin = "".join(lazy_pinyin(name_normalized)).lower()
     name_abbr = "".join(
         lazy_pinyin(name_normalized, style=Style.FIRST_LETTER)
     ).lower()
+    # 逐字拼音列表，用于单字精确匹配（如搜 "wei" 精确匹配 "伟"）
+    name_pinyin_chars = [s.lower() for s in lazy_pinyin(name_normalized)]
     return {
         "name_normalized": name_normalized,
         "name_pinyin": name_pinyin,
         "name_abbr": name_abbr,
+        "name_pinyin_chars": name_pinyin_chars,
     }
 
 
@@ -446,6 +451,10 @@ def match_name_query(
                 return MATCH_RANKS[MATCH_PINYIN_FULL], MATCH_PINYIN_FULL
             if len(normalized_query) >= PINYIN_ABBR_EXACT_MIN_LEN and normalized_query == fields["name_abbr"]:
                 return MATCH_RANKS[MATCH_PINYIN_ABBR], MATCH_PINYIN_ABBR
+            # 逐字拼音精确匹配（如搜 "wei" 精确命中 "伟"）
+            pinyin_chars = fields.get("name_pinyin_chars", [])
+            if pinyin_chars and len(normalized_query) >= 2 and normalized_query in pinyin_chars:
+                return MATCH_RANKS[MATCH_PINYIN_CHAR_EXACT], MATCH_PINYIN_CHAR_EXACT
             if len(normalized_query) >= prefix_threshold and fields["name_pinyin"].startswith(normalized_query):
                 return MATCH_RANKS[MATCH_PINYIN_PREFIX], MATCH_PINYIN_PREFIX
             if len(normalized_query) >= prefix_threshold and fields["name_abbr"].startswith(normalized_query):
