@@ -282,7 +282,7 @@ def _render_list_query(db):
     st.subheader("名单查询")
     # Flash 消息渲染（操作成功后 rerun 保留的反馈）
     if _flash := st.session_state.pop("_flash_success", None):
-        st.success(_flash)
+        st.toast(_flash, icon="✅")
     
     fn, fs, fm, page_size, sort_key, sort_asc = render_list_controls("admin_effective")
     

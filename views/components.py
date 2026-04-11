@@ -277,7 +277,7 @@ def render_list_controls(key_prefix: str, sort_columns=None, page_size_options=N
         btn_label = "🏛️ 选择分类或具体院系展开面板 ▾" if selected_count == 0 else f"🏛️ 已勾选 {selected_count} 项分类或院系，点击继续修改 ▾"
         fm = []
         
-        st.markdown("<div style='font-size:14px;margin-bottom:6px;opacity:0.8'>单位精准筛选 (点击下方展开面板)</div>", unsafe_allow_html=True)
+        st.markdown("<div style='font-size:14px;margin-bottom:10px;margin-top:4px;opacity:0.8'>单位精准筛选 (点击下方展开面板)</div>", unsafe_allow_html=True)
         with st.popover(btn_label, use_container_width=True):
             with st.container(height=320, border=False):
                 # 优先渲染常规类别
@@ -612,7 +612,7 @@ def render_single_unit_selector(key_prefix: str, default_val: str = "", label: s
 
     with st.popover(popover_label, use_container_width=True):
         st.markdown(
-            "<div style='font-size:13px;color:gray;margin-bottom:8px'>输入关键字模糊检索，或按大类展开选择。</div>",
+            "<div style='font-size:13px;color:gray;margin-top:4px;margin-bottom:12px'>输入关键字模糊检索，或按大类展开选择。</div>",
             unsafe_allow_html=True,
         )
         search_val = st.text_input(

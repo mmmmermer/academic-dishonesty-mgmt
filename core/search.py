@@ -219,34 +219,39 @@ def build_name_terms_sql_filter(
             continue
 
         if kind == "pinyin":
-            if not include_helper_columns:
-                continue
             normalized = normalize_pinyin_text(term)
             if not normalized:
                 continue
 
             per_term: list[str] = []
-            key_full = f"pf_eq_{idx}"
-            params[key_full] = normalized
-            per_term.append(f"name_pinyin_full = :{key_full}")
 
-            if len(normalized) >= PINYIN_ABBR_EXACT_MIN_LEN:
-                key_abbr = f"pa_eq_{idx}"
-                params[key_abbr] = normalized
-                per_term.append(f"name_abbr = :{key_abbr}")
+            # 始终添加姓名直接 LIKE 匹配降级（支持纯字母姓名如 "ASD"）
+            key_name_like = f"nl_{idx}"
+            params[key_name_like] = f"%{_sql_like_escape(term.strip())}%"
+            per_term.append(f"name LIKE :{key_name_like} ESCAPE '!'")
 
-            if len(normalized) >= prefix_threshold:
-                key_full_prefix = f"pf_pre_{idx}"
-                key_abbr_prefix = f"pa_pre_{idx}"
-                params[key_full_prefix] = f"{_sql_like_escape(normalized)}%"
-                params[key_abbr_prefix] = f"{_sql_like_escape(normalized)}%"
-                per_term.append(f"name_pinyin_full LIKE :{key_full_prefix} ESCAPE '!'")
-                per_term.append(f"name_abbr LIKE :{key_abbr_prefix} ESCAPE '!'")
+            if include_helper_columns:
+                key_full = f"pf_eq_{idx}"
+                params[key_full] = normalized
+                per_term.append(f"name_pinyin_full = :{key_full}")
 
-            if len(normalized) >= PINYIN_SUBSTRING_MIN_LEN:
-                key_full_sub = f"pf_sub_{idx}"
-                params[key_full_sub] = f"%{_sql_like_escape(normalized)}%"
-                per_term.append(f"name_pinyin_full LIKE :{key_full_sub} ESCAPE '!'")
+                if len(normalized) >= PINYIN_ABBR_EXACT_MIN_LEN:
+                    key_abbr = f"pa_eq_{idx}"
+                    params[key_abbr] = normalized
+                    per_term.append(f"name_abbr = :{key_abbr}")
+
+                if len(normalized) >= prefix_threshold:
+                    key_full_prefix = f"pf_pre_{idx}"
+                    key_abbr_prefix = f"pa_pre_{idx}"
+                    params[key_full_prefix] = f"{_sql_like_escape(normalized)}%"
+                    params[key_abbr_prefix] = f"{_sql_like_escape(normalized)}%"
+                    per_term.append(f"name_pinyin_full LIKE :{key_full_prefix} ESCAPE '!'")
+                    per_term.append(f"name_abbr LIKE :{key_abbr_prefix} ESCAPE '!'")
+
+                if len(normalized) >= PINYIN_SUBSTRING_MIN_LEN:
+                    key_full_sub = f"pf_sub_{idx}"
+                    params[key_full_sub] = f"%{_sql_like_escape(normalized)}%"
+                    per_term.append(f"name_pinyin_full LIKE :{key_full_sub} ESCAPE '!'")
 
             if per_term:
                 clauses.append("(" + " OR ".join(per_term) + ")")
@@ -423,19 +428,30 @@ def match_name_query(
 
     if query_type == "pinyin":
         normalized_query = normalize_pinyin_text(query)
-        if not normalized_query or not fields["name_pinyin"]:
+        if not normalized_query:
             return None
-        prefix_threshold = max(1, prefix_min_len)
-        if normalized_query == fields["name_pinyin"]:
-            return MATCH_RANKS[MATCH_PINYIN_FULL], MATCH_PINYIN_FULL
-        if len(normalized_query) >= PINYIN_ABBR_EXACT_MIN_LEN and normalized_query == fields["name_abbr"]:
-            return MATCH_RANKS[MATCH_PINYIN_ABBR], MATCH_PINYIN_ABBR
-        if len(normalized_query) >= prefix_threshold and fields["name_pinyin"].startswith(normalized_query):
-            return MATCH_RANKS[MATCH_PINYIN_PREFIX], MATCH_PINYIN_PREFIX
-        if len(normalized_query) >= prefix_threshold and fields["name_abbr"].startswith(normalized_query):
-            return MATCH_RANKS[MATCH_PINYIN_ABBR_PREFIX], MATCH_PINYIN_ABBR_PREFIX
-        if len(normalized_query) >= PINYIN_SUBSTRING_MIN_LEN and normalized_query in fields["name_pinyin"]:
-            return MATCH_RANKS[MATCH_PINYIN_SUBSTRING], MATCH_PINYIN_SUBSTRING
+
+        # 直接姓名子串匹配降级（支持纯字母姓名如 "ASD"）
+        name_upper = fields["name_normalized"].upper()
+        query_upper = query.strip().upper()
+        if query_upper and query_upper in name_upper:
+            if query_upper == name_upper:
+                return MATCH_RANKS[MATCH_NAME_EXACT], MATCH_NAME_EXACT
+            return MATCH_RANKS[MATCH_NAME_PARTIAL], MATCH_NAME_PARTIAL
+
+        # 拼音匹配（需要拼音字段非空）
+        if fields["name_pinyin"]:
+            prefix_threshold = max(1, prefix_min_len)
+            if normalized_query == fields["name_pinyin"]:
+                return MATCH_RANKS[MATCH_PINYIN_FULL], MATCH_PINYIN_FULL
+            if len(normalized_query) >= PINYIN_ABBR_EXACT_MIN_LEN and normalized_query == fields["name_abbr"]:
+                return MATCH_RANKS[MATCH_PINYIN_ABBR], MATCH_PINYIN_ABBR
+            if len(normalized_query) >= prefix_threshold and fields["name_pinyin"].startswith(normalized_query):
+                return MATCH_RANKS[MATCH_PINYIN_PREFIX], MATCH_PINYIN_PREFIX
+            if len(normalized_query) >= prefix_threshold and fields["name_abbr"].startswith(normalized_query):
+                return MATCH_RANKS[MATCH_PINYIN_ABBR_PREFIX], MATCH_PINYIN_ABBR_PREFIX
+            if len(normalized_query) >= PINYIN_SUBSTRING_MIN_LEN and normalized_query in fields["name_pinyin"]:
+                return MATCH_RANKS[MATCH_PINYIN_SUBSTRING], MATCH_PINYIN_SUBSTRING
         return None
 
     return None

@@ -186,12 +186,6 @@ def _render_audit_log_display(logs, total_export, db, filter_operator, filter_ty
 
 def _render_audit_log_section(db):
     st.subheader("审计日志")
-
-    # ⑪ 统计概览仪表板
-    _render_audit_stats(db)
-    st.divider()
-
-    st.caption("可按操作人、操作类型、日期范围单独或组合筛选，留空或选「全部」表示不限制。")
     operator_names = _get_audit_operator_names(db)
     audit_type_display_options = ["全部"] + [AUDIT_TYPE_NAMES.get(t, t) for t in AUDIT_ACTION_TYPES]
     audit_name_to_code = {v: k for k, v in AUDIT_TYPE_NAMES.items()}

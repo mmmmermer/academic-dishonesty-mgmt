@@ -520,7 +520,7 @@ def _render_management(db):
     """名单管理：按「录入数据 → 修改与删除 → 已撤销名单」分 Tab。"""
     # Flash 消息渲染（操作成功后 rerun 保留的反馈）
     if _flash := st.session_state.pop("_flash_success", None):
-        st.success(_flash)
+        st.toast(_flash, icon="✅")
     st.caption("负责名单的新增进件、检索修改及作废恢复工作。浏览生效名单全集请使用左侧的『名单查询』板块。")
     tab_rec, tab_mod, tab_rev = st.tabs(["录入数据", "修改与删除", "已撤销名单"])
     with tab_rec:

@@ -147,19 +147,22 @@ def _render_user_management(db):
     """用户管理：用户列表、新增用户、密码重置、启用/禁用。"""
     # Flash 消息渲染（操作成功后 rerun 保留的反馈）
     if _flash := st.session_state.pop("_flash_success", None):
-        st.success(_flash)
+        st.toast(_flash, icon="✅")
     users = db.query(User).order_by(User.id).all()
     _render_user_list(users)
     st.divider()
     _render_add_user_form(db)
     st.divider()
-    st.subheader("密码重置与启用/禁用")
-    st.caption("选择用户后执行重置密码或切换账号状态；不能禁用当前登录账号。")
+    st.subheader("密码重置")
+    st.caption("选择用户并输入新密码。重置后该用户所有活跃会话将立即失效。")
     if not users:
         st.caption(EMPTY_NO_USER)
     else:
-        rcol1, rcol2 = st.columns(2)
-        with rcol1:
-            _render_reset_password_section(db, users)
-        with rcol2:
-            _render_toggle_user_section(db, users)
+        _render_reset_password_section(db, users)
+    st.divider()
+    st.subheader("账号启用 / 禁用")
+    st.caption("切换账号状态；禁用后该用户无法登录，不能禁用当前登录账号。")
+    if not users:
+        st.caption(EMPTY_NO_USER)
+    else:
+        _render_toggle_user_section(db, users)
