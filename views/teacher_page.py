@@ -3,7 +3,6 @@
 作为路由器负责分发各个功能板块的交互，已剥离所有硬编码 UI 至子组件。
 """
 import streamlit as st
-import time
 
 from core.database import db_session
 from core.config import (
@@ -33,7 +32,8 @@ def _get_teacher_nav_index():
 
 
 def _on_teacher_nav_change():
-    st.session_state["teacher_nav_loading"] = True
+    """导航回调（保留空函数以满足 on_change 绑定）。"""
+    pass
 
 
 def render_teacher_sidebar_nav():
@@ -56,21 +56,14 @@ def render_teacher_page():
     st.title(TITLE_TEACHER)
     st.caption(CAPTION_TEACHER)
 
-    main_area = st.empty()
-
-    if st.session_state.pop("teacher_nav_loading", False):
-        main_area.info("⏳ 正在为您极速切换板块并提取核心数据，请稍候...", icon="🚀")
-        time.sleep(0.05)
-
     nav_index = _get_teacher_nav_index()
-    
-    with main_area.container():
-        if nav_index == TEACHER_NAV_SINGLE:
-            render_single_search()
-        elif nav_index == TEACHER_NAV_BATCH:
-            render_batch_check()
-        elif nav_index == TEACHER_NAV_LIST_QUERY:
-            with db_session() as db:
-                render_teacher_list_query(db)
-        else:
-            render_my_logs()
+
+    if nav_index == TEACHER_NAV_SINGLE:
+        render_single_search()
+    elif nav_index == TEACHER_NAV_BATCH:
+        render_batch_check()
+    elif nav_index == TEACHER_NAV_LIST_QUERY:
+        with db_session() as db:
+            render_teacher_list_query(db)
+    else:
+        render_my_logs()

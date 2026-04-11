@@ -107,7 +107,7 @@ def render_login_page():
             return
 
     # DB 会话已关闭，写审计日志用独立会话
-    log_audit_action(AUDIT_LOGIN, target=user_username, details="")
+    log_audit_action(AUDIT_LOGIN, target=user_username, details="登录成功")
     st.session_state[SESSION_KEY_LOGGED_IN] = True
     st.session_state[SESSION_KEY_USER_ROLE] = user_role
     st.session_state[SESSION_KEY_USER_NAME] = user_full_name

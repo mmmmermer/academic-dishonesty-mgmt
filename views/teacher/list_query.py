@@ -13,6 +13,7 @@ from views.components import (
     render_blacklist_table,
     render_list_controls,
     render_pagination,
+    render_record_detail_card,
 )
 
 
@@ -36,13 +37,19 @@ def render_teacher_list_query(db):
     page = clamp_page("teacher_effective_page", total_pages)
     page_records = ordered.offset(page * page_size).limit(page_size).all()
     
-    st.caption(f"当前检索条件下共有 **{total}** 条有效记录。由于权限控制，此处仅支持查阅名单及公示决定（PDF）。")
+    st.caption(f"当前检索条件下共有 **{total}** 条有效记录。由于权限控制，此处仅支持查阅名单及公示决定（PDF）。点击某行可查看完整详情。")
     
-    # 不传递 selection_key，底层方法就不会渲染复选框勾选逻辑
-    render_blacklist_table(page_records, page_size, page, selection_key=None)
+    # 使用 single-row 选择模式（点击行即选中，无复选框列）
+    state_sig = f"{page}_{page_size}_{fn}_{fs}_{','.join(sorted(fm))}_{sort_key}_{sort_asc}"
+    sel_key = f"teacher_query_sel_{state_sig}"
+    selected = render_blacklist_table(page_records, page_size, page, selection_key=sel_key)
     
     # 分页器（紧跟表格，方便翻页查找）
     render_pagination("teacher_effective_page", page, total_pages, total, len(page_records))
+    
+    # 选中单条记录时展开详情卡片
+    if len(selected) == 1:
+        render_record_detail_card(selected[0], key_prefix="teacher_lq_detail")
     
     st.markdown("---")
     st.caption("注：查询过程中不会记录单条浏览痕迹，系统严禁离线导出大规模黑名单人员信息。")

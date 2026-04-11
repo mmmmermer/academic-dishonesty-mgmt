@@ -1,9 +1,9 @@
 """
-管理员系统维护：审计日志（筛选/导出）、数据库备份与恢复。
+管理员系统维护：审计日志（统计概览/筛选/详情展开/导出）、数据库备份与恢复。
 """
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 
 import pandas as pd
@@ -38,21 +38,24 @@ def _get_audit_operator_names(db):
         return []
 
 
-def _audit_log_export_query(db, filter_operator, filter_type, use_date_filter, filter_date):
+def _audit_log_export_query(db, filter_operator, filter_type, date_start=None, date_end=None):
+    """构建审计日志查询，支持日期范围筛选。"""
     q = db.query(AuditLog).order_by(AuditLog.timestamp.desc())
     if filter_operator != "全部":
         q = q.filter(AuditLog.operator_name == filter_operator)
     if filter_type:
         q = q.filter(AuditLog.action_type == filter_type)
-    if use_date_filter and filter_date is not None:
-        q = q.filter(func.date(AuditLog.timestamp) == str(filter_date))
+    if date_start is not None:
+        q = q.filter(func.date(AuditLog.timestamp) >= str(date_start))
+    if date_end is not None:
+        q = q.filter(func.date(AuditLog.timestamp) <= str(date_end))
     return q
 
 
-def _fetch_audit_logs(db, filter_operator, filter_type, use_date_filter, filter_date):
+def _fetch_audit_logs(db, filter_operator, filter_type, date_start=None, date_end=None):
     """单次查询获取展示用记录（最多 501 条）和总数，避免两次独立查询。"""
     try:
-        base = _audit_log_export_query(db, filter_operator, filter_type, use_date_filter, filter_date)
+        base = _audit_log_export_query(db, filter_operator, filter_type, date_start, date_end)
         # 取 501 条：若恰好 501 条说明总数 > 500，需要 count()；否则总数即为结果数
         logs = base.limit(501).all()
         if len(logs) <= 500:
@@ -64,8 +67,8 @@ def _fetch_audit_logs(db, filter_operator, filter_type, use_date_filter, filter_
         return None, 0
 
 
-def _fetch_audit_logs_export_batched(db, filter_operator, filter_type, use_date_filter, filter_date):
-    q = _audit_log_export_query(db, filter_operator, filter_type, use_date_filter, filter_date)
+def _fetch_audit_logs_export_batched(db, filter_operator, filter_type, date_start=None, date_end=None):
+    q = _audit_log_export_query(db, filter_operator, filter_type, date_start, date_end)
     rows = []
     stream_query = q.limit(EXPORT_MAX_ROWS)
     if EXPORT_BATCH_SIZE > 0:
@@ -75,25 +78,87 @@ def _fetch_audit_logs_export_batched(db, filter_operator, filter_type, use_date_
     return rows
 
 
-def _render_audit_log_display(logs, total_export, db, filter_operator, filter_type, use_date_filter, filter_date):
+def _render_audit_stats(db):
+    """渲染审计日志统计概览卡片行。"""
+    try:
+        today = datetime.now().date()
+        week_ago = today - timedelta(days=7)
+
+        today_count = db.query(func.count(AuditLog.id)).filter(
+            func.date(AuditLog.timestamp) == str(today)
+        ).scalar() or 0
+
+        week_count = db.query(func.count(AuditLog.id)).filter(
+            func.date(AuditLog.timestamp) >= str(week_ago)
+        ).scalar() or 0
+
+        total_count = db.query(func.count(AuditLog.id)).scalar() or 0
+
+        # 最多操作类型
+        top_type_row = db.query(
+            AuditLog.action_type, func.count(AuditLog.id).label("cnt")
+        ).group_by(AuditLog.action_type).order_by(func.count(AuditLog.id).desc()).first()
+        top_type = AUDIT_TYPE_NAMES.get(top_type_row[0], top_type_row[0]) if top_type_row else "—"
+
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric("📊 今日操作", today_count)
+        with c2:
+            st.metric("📈 本周操作", week_count)
+        with c3:
+            st.metric("📋 累计总量", total_count)
+        with c4:
+            st.metric("🔥 最频繁类型", top_type)
+    except Exception:
+        pass  # 统计失败不影响主流程
+
+
+def _render_audit_log_display(logs, total_export, db, filter_operator, filter_type, date_start, date_end):
     if not logs:
         st.caption("暂无符合条件的审计日志。")
         return
     log_df = pd.DataFrame(
-        [{"ID": r.id, "操作人": r.operator_name, "类型": AUDIT_TYPE_NAMES.get(r.action_type, r.action_type), "对象": r.target or "", "详情": (r.details or "")[:100], "时间": str(r.timestamp)} for r in logs]
+        [{"ID": r.id, "操作人": r.operator_name, "类型": AUDIT_TYPE_NAMES.get(r.action_type, r.action_type), "对象": r.target or "", "详情": ((r.details or "")[:200] + "…" if len(r.details or "") > 200 else (r.details or "")), "时间": r.timestamp.strftime("%Y-%m-%d %H:%M:%S") if r.timestamp else ""} for r in logs]
     )
-    st.dataframe(log_df, use_container_width=True, hide_index=True)
-    st.caption(f"表格展示 {len(logs)} 条（最多 500 条）；导出为当前筛选结果，共 {total_export} 条（最多导出 {EXPORT_MAX_ROWS} 条）。")
 
-    # 惰性导出：先显示"准备导出"按钮，点击后查询并缓存，再显示下载按钮
-    current_hash = f"audit_{filter_operator}_{filter_type}_{use_date_filter}_{filter_date}"
+    # 支持选中行展开详情
+    event = st.dataframe(
+        log_df, use_container_width=True, hide_index=True,
+        on_select="rerun", selection_mode="single-row",
+        key="audit_log_table_sel",
+    )
+    st.caption(f"表格展示 {len(logs)} 条（最多 500 条）；导出为当前筛选结果，共 {total_export} 条（最多导出 {EXPORT_MAX_ROWS} 条）。点击某行可查看完整详情。")
+
+    # 选中行详情展开
+    if hasattr(event, "selection") and hasattr(event.selection, "rows") and event.selection.rows:
+        sel_idx = event.selection.rows[0]
+        if sel_idx < len(logs):
+            sel_log = logs[sel_idx]
+            with st.container(border=True):
+                st.markdown(f"#### 📝 日志详情 (ID: {sel_log.id})")
+                dc1, dc2 = st.columns(2)
+                with dc1:
+                    st.markdown(f"**操作人**：{sel_log.operator_name}")
+                    st.markdown(f"**操作类型**：{AUDIT_TYPE_NAMES.get(sel_log.action_type, sel_log.action_type)}")
+                with dc2:
+                    st.markdown(f"**操作对象**：{sel_log.target or '—'}")
+                    st.markdown(f"**时间**：{sel_log.timestamp.strftime('%Y-%m-%d %H:%M:%S') if sel_log.timestamp else '—'}")
+                details = sel_log.details or ""
+                if details:
+                    st.markdown("**详情（全文）**：")
+                    st.code(details, language=None)
+                else:
+                    st.caption("详情：无")
+
+    # 惰性导出
+    current_hash = f"audit_{filter_operator}_{filter_type}_{date_start}_{date_end}"
     cache_hash_key = "audit_export_hash"
     cache_data_key = "audit_export_data"
 
     if st.session_state.get(cache_hash_key) != current_hash or st.session_state.get(cache_data_key) is None:
         if st.button(f"⚡ 准备导出审计日志（共 {total_export} 条）", use_container_width=True, key="audit_prep_export"):
             with st.spinner(SPINNER_EXPORT):
-                logs_export = _fetch_audit_logs_export_batched(db, filter_operator, filter_type, use_date_filter, filter_date)
+                logs_export = _fetch_audit_logs_export_batched(db, filter_operator, filter_type, date_start, date_end)
             if not logs_export:
                 st.caption("无可导出的日志。")
                 return
@@ -121,7 +186,12 @@ def _render_audit_log_display(logs, total_export, db, filter_operator, filter_ty
 
 def _render_audit_log_section(db):
     st.subheader("审计日志")
-    st.caption("可按操作人、操作类型、日期单独或组合筛选，留空或选「全部」表示不限制。")
+
+    # ⑪ 统计概览仪表板
+    _render_audit_stats(db)
+    st.divider()
+
+    st.caption("可按操作人、操作类型、日期范围单独或组合筛选，留空或选「全部」表示不限制。")
     operator_names = _get_audit_operator_names(db)
     audit_type_display_options = ["全部"] + [AUDIT_TYPE_NAMES.get(t, t) for t in AUDIT_ACTION_TYPES]
     audit_name_to_code = {v: k for k, v in AUDIT_TYPE_NAMES.items()}
@@ -131,16 +201,63 @@ def _render_audit_log_section(db):
     with col2:
         filter_type_display = st.selectbox("操作类型", audit_type_display_options, key="audit_filter_type")
         filter_type = None if filter_type_display == "全部" or filter_type_display not in audit_name_to_code else audit_name_to_code[filter_type_display]
+
+    # ⑬ 日期范围筛选 + 快捷按钮
     with col3:
         use_date_filter = st.checkbox("按日期筛选", key="audit_use_date")
-        filter_date = st.date_input("选择日期", key="audit_filter_date") if use_date_filter else None
+
+    date_start = None
+    date_end = None
+    if use_date_filter:
+        # 快捷时间宏按钮
+        today = datetime.now().date()
+        qc1, qc2, qc3, qc4 = st.columns(4)
+        with qc1:
+            if st.button("📅 今天", key="audit_q_today", use_container_width=True):
+                st.session_state["audit_date_start"] = today
+                st.session_state["audit_date_end"] = today
+                st.rerun()
+        with qc2:
+            if st.button("📅 近 7 天", key="audit_q_7d", use_container_width=True):
+                st.session_state["audit_date_start"] = today - timedelta(days=7)
+                st.session_state["audit_date_end"] = today
+                st.rerun()
+        with qc3:
+            if st.button("📅 近 30 天", key="audit_q_30d", use_container_width=True):
+                st.session_state["audit_date_start"] = today - timedelta(days=30)
+                st.session_state["audit_date_end"] = today
+                st.rerun()
+        with qc4:
+            if st.button("📅 全部", key="audit_q_all", use_container_width=True):
+                st.session_state.pop("audit_date_start", None)
+                st.session_state.pop("audit_date_end", None)
+                st.session_state["audit_use_date"] = False
+                st.rerun()
+
+        dc1, dc2 = st.columns(2)
+        with dc1:
+            date_start = st.date_input(
+                "起始日期",
+                value=st.session_state.get("audit_date_start", today - timedelta(days=7)),
+                key="audit_date_start_input",
+            )
+        with dc2:
+            date_end = st.date_input(
+                "结束日期",
+                value=st.session_state.get("audit_date_end", today),
+                key="audit_date_end_input",
+            )
+        # 同步到 session_state 供快捷按钮回写
+        st.session_state["audit_date_start"] = date_start
+        st.session_state["audit_date_end"] = date_end
+
     try:
         with st.spinner("加载日志..."):
-            logs, total_export = _fetch_audit_logs(db, filter_operator, filter_type, use_date_filter, filter_date)
+            logs, total_export = _fetch_audit_logs(db, filter_operator, filter_type, date_start, date_end)
         if logs is None:
             st.error("加载审计日志失败，" + MSG_TRY_AGAIN)
         else:
-            _render_audit_log_display(logs, total_export, db, filter_operator, filter_type, use_date_filter, filter_date)
+            _render_audit_log_display(logs, total_export, db, filter_operator, filter_type, date_start, date_end)
     except Exception:
         st.error("加载审计日志失败，" + MSG_TRY_AGAIN)
 

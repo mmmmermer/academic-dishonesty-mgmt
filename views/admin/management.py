@@ -198,8 +198,7 @@ def _handle_import_confirm(db):
             del st.session_state[key]
     st.session_state["admin_last_import_result"] = result
     logger.info("批量导入完成 imported=%s updated=%s skipped=%s", result["imported"], result["updated"], result.get("skipped", 0))
-    st.success(SUCCESS_IMPORT_DONE)
-    st.balloons()
+    st.session_state["_flash_success"] = SUCCESS_IMPORT_DONE
     st.rerun()
 
 
@@ -215,8 +214,9 @@ def _render_import_section(db):
         except ValueError as e:
             st.error(str(e))
     if st.session_state.get("admin_import_df") is not None and st.session_state.get("admin_import_filename"):
-        st.caption("以下为解析结果前 10 行预览，确认无误后点击「开始导入」。")
-        st.dataframe(st.session_state["admin_import_df"].head(10), use_container_width=True, hide_index=True)
+        _df = st.session_state["admin_import_df"]
+        st.caption(f"该文件共 **{len(_df)}** 行数据，以下为前 10 行预览，确认无误后点击「开始导入」。")
+        st.dataframe(_df.head(10), use_container_width=True, hide_index=True)
         if st.button("开始导入", key="admin_import_btn"):
             _handle_import_confirm(db)
 
@@ -260,8 +260,8 @@ def _try_manual_add(db, add_name, add_student_id, add_major, add_reason_text, ad
             db.add(rec)
             sync_blacklist_record_search_helper_fields(db, rec)
             db.commit()
-            log_audit_action(AUDIT_ADD, target=add_name, details=f"学号 {sid_clean[:8]}***")
-            st.success(SUCCESS_ADDED)
+            log_audit_action(AUDIT_ADD, target=add_name, details=f"姓名: {add_name}, 学号: {sid_clean[:8]}***, 单位: {add_major or '未填'}")
+            st.session_state["_flash_success"] = f"已成功添加：{add_name}({sid_clean[:8]}***)"
             return True
     except Exception:
         db.rollback()
@@ -279,7 +279,7 @@ def _render_manual_add_section(db):
     from views.components import render_single_unit_selector
     add_major = render_single_unit_selector("add_major")
     
-    add_reason_text = st.text_input("处理原因(文字)", key="add_reason_text_input")
+    add_reason_text = st.text_area("处理原因(文字)", key="add_reason_text_input", height=100, placeholder="支持多段落，按 Enter 换行")
     add_reason_file = st.file_uploader(f"认定结论 (PDF)", type=["pdf"], key="add_reason_file")
     add_date = st.date_input(LABEL_PUNISHMENT_DATE, key="add_date")
     
@@ -288,8 +288,9 @@ def _render_manual_add_section(db):
     add_impact_end = impact_dates[1] if impact_dates and len(impact_dates) == 2 else None
         
     if st.button("添加", key="admin_add_btn") and _try_manual_add(db, add_name, add_student_id, add_major, add_reason_text, add_reason_file, add_date, add_impact_start, add_impact_end):
-        # 成功以后手动清空通过 state 更新组件来重置，简单做法是给各个 key 清空；或直接由底层通过 rerun 来重置未保存的 session_state。
-        # 这里为了快速响应直接刷新页面。
+        # 清空表单输入
+        for k in ("add_name", "add_student_id", "add_reason_text_input", "add_reason_file", "add_major_single_unit", "add_major_unit_selectbox", "add_major_custom_unit"):
+            st.session_state.pop(k, None)
         st.rerun()
 
 
@@ -318,14 +319,14 @@ def _render_modify_delete_section(db):
                     st.session_state["admin_edit_id"] = rec.id
                     st.rerun()
             with col_del:
-                if st.button("🗑️ 撤销（软删除）此记录", key="admin_mod_del_btn"):
+                if st.button("🗑️ 撤销（软删除）此记录", key="admin_mod_del_btn", type="primary"):
                     with st.spinner("正在废弃记录..."):
                         rec.status = 0
                         db.commit()
-                        log_audit_action(AUDIT_DELETE, target=sid_clean[:16], details=f"软删除：{rec.name} {sid_clean[:8]}***")
+                        log_audit_action(AUDIT_DELETE, target=sid_clean[:16], details=f"撤销: {rec.name}({sid_clean[:8]}***), 单位: {rec.major or '未知'}")
                     if "admin_edit_id" in st.session_state:
                         del st.session_state["admin_edit_id"]
-                    st.success("记录已成功撤销，现已移动至已撤销名单汇总里。")
+                    st.session_state["_flash_success"] = f"记录已撤销：{rec.name}({sid_clean[:8]}***)"
                     st.rerun()
         except Exception:
             db.rollback()
@@ -342,7 +343,7 @@ def _render_effective_init_block(db):
     st.warning(MSG_CONFIRM_INIT_LIST)
     col_confirm, col_cancel = st.columns(2)
     with col_confirm:
-        if st.button("确认初始化", key="admin_init_confirm_btn"):
+        if st.button("⚠️ 确认初始化", key="admin_init_confirm_btn", type="primary"):
             try:
                 with st.spinner("正在初始化..."):
                     n = db.query(Blacklist).filter(Blacklist.status == 1).update({Blacklist.status: 0})
@@ -399,9 +400,9 @@ def _try_save_edit_form(edit_db, rec, edit_id, edit_name, edit_major, edit_reaso
         sync_blacklist_record_search_helper_fields(edit_db, rec)
         
         edit_db.commit()
-        log_audit_action(AUDIT_ADD, target=f"编辑记录 {edit_id}", details=f"{rec.name} {rec.student_id[:8]}***")
+        log_audit_action(AUDIT_ADD, target=f"编辑记录 {edit_id}", details=f"编辑: {rec.name}({rec.student_id[:8]}***), 单位: {rec.major or '未填'}")
         _clear_edit_id()
-        st.success(SUCCESS_SAVED)
+        st.session_state["_flash_success"] = f"已保存修改：{rec.name}({rec.student_id[:8]}***)"
         st.rerun()
     except Exception:
         edit_db.rollback()
@@ -431,7 +432,7 @@ def _render_edit_form_section():
         from views.components import render_single_unit_selector
         edit_major = render_single_unit_selector("admin_edit_major", default_val=rec.major or "")
         
-        edit_reason_text = st.text_input("处理原因(文字)", value=(rec.reason_text or ""), key="admin_edit_reason_text")
+        edit_reason_text = st.text_area("处理原因(文字)", value=(rec.reason_text or ""), key="admin_edit_reason_text", height=100, placeholder="支持多段落，按 Enter 换行")
         if rec.reason:
             st.caption(f"当前已有结论文件：{rec.reason.split('/')[-1]}")
         edit_reason_file = st.file_uploader(f"更新认定结论 (PDF)", type=["pdf"], key="admin_edit_reason_file")
@@ -483,9 +484,9 @@ def _render_revoked_restore_expander(db):
                         with st.spinner("正在恢复..."):
                             rec.status = 1
                             db.commit()
-                            log_audit_action(AUDIT_RESTORE, target=sid_restore[:16], details=f"恢复：{rec.name} {sid_restore[:8]}***")
+                            log_audit_action(AUDIT_RESTORE, target=sid_restore[:16], details=f"恢复: {rec.name}({sid_restore[:8]}***), 单位: {rec.major or '未知'}")
                         logger.info("名单恢复为生效 学号=%s", sid_restore[:16])
-                        st.success("已恢复为生效。")
+                        st.session_state["_flash_success"] = f"已恢复：{rec.name}({sid_restore[:8]}***)"
                         st.rerun()
                 except Exception:
                     db.rollback()
@@ -517,6 +518,9 @@ def _render_revoked_section(db):
 
 def _render_management(db):
     """名单管理：按「录入数据 → 修改与删除 → 已撤销名单」分 Tab。"""
+    # Flash 消息渲染（操作成功后 rerun 保留的反馈）
+    if _flash := st.session_state.pop("_flash_success", None):
+        st.success(_flash)
     st.caption("负责名单的新增进件、检索修改及作废恢复工作。浏览生效名单全集请使用左侧的『名单查询』板块。")
     tab_rec, tab_mod, tab_rev = st.tabs(["录入数据", "修改与删除", "已撤销名单"])
     with tab_rec:

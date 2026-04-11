@@ -59,10 +59,11 @@ def render_batch_check():
                     )
                     matched.extend(batch_records)
             except Exception:
-                st.error("比惊对失败，" + MSG_TRY_AGAIN)
+                st.error("比对失败，" + MSG_TRY_AGAIN)
                 return
 
         log_audit_action(AUDIT_QUERY_BATCH, target=uploaded.name, details=f"共 {len(student_ids)} 条，命中 {len(matched)} 条")
+        st.toast(f"比对完成：共 {len(student_ids)} 人，命中 {len(matched)} 条")
 
         # 按学号构建上传名单行（与导入格式一致：姓名、学号、专业、原因、处分时间）
         id_to_upload_row = {}

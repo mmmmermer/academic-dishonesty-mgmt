@@ -55,8 +55,8 @@ def _try_add_user(db, uname, pwd, fname, new_role):
             u = User(username=uname, password_hash=pwd_hash, full_name=fname, role="admin" if new_role == "管理员" else "teacher", is_active=True)
             db.add(u)
             db.commit()
-            log_audit_action(AUDIT_ADD, target=f"用户 {uname}", details=f"角色 {new_role}")
-            st.success("用户已添加。")
+            log_audit_action(AUDIT_ADD, target=f"用户 {uname}", details=f"新增: {uname}({fname}), 角色: {new_role}")
+            st.session_state["_flash_success"] = f"用户已添加：{fname}({uname})，角色：{new_role}"
             return True
     except Exception:
         db.rollback()
@@ -76,6 +76,9 @@ def _render_add_user_form(db):
             pwd = (new_password or "").strip()
             fname = (new_full_name or "").strip()
             if _try_add_user(db, uname, pwd, fname, new_role):
+                # 清空表单输入
+                for k in ("new_username", "new_password", "new_full_name"):
+                    st.session_state.pop(k, None)
                 st.rerun()
 
 
@@ -103,8 +106,8 @@ def _render_reset_password_section(db, users):
             user.password_hash = bcrypt.hashpw(pwd_stripped.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
             db.commit()
             delete_sessions_for_user(user.username)
-            log_audit_action(AUDIT_RESET_PWD, target=f"密码重置 {user.username}", details="")
-            st.success(SUCCESS_PWD_RESET)
+            log_audit_action(AUDIT_RESET_PWD, target=f"密码重置 {user.username}", details=f"重置密码: {user.username}({user.full_name})")
+            st.session_state["_flash_success"] = f"已重置 {user.full_name}({user.username}) 的密码"
             st.rerun()
     except Exception:
         db.rollback()
@@ -132,8 +135,8 @@ def _render_toggle_user_section(db, users):
             if not target_user.is_active:
                 delete_sessions_for_user(target_user.username)
             status = "启用" if target_user.is_active else "禁用"
-            log_audit_action(AUDIT_TOGGLE_USER, target=f"账号{status} {target_user.username}", details="")
-            st.success(f"已{status} {target_user.username}。")
+            log_audit_action(AUDIT_TOGGLE_USER, target=f"账号{status} {target_user.username}", details=f"{status}: {target_user.username}({target_user.full_name})")
+            st.session_state["_flash_success"] = f"已{status} {target_user.full_name}({target_user.username})"
             st.rerun()
     except Exception:
         db.rollback()
@@ -142,6 +145,9 @@ def _render_toggle_user_section(db, users):
 
 def _render_user_management(db):
     """用户管理：用户列表、新增用户、密码重置、启用/禁用。"""
+    # Flash 消息渲染（操作成功后 rerun 保留的反馈）
+    if _flash := st.session_state.pop("_flash_success", None):
+        st.success(_flash)
     users = db.query(User).order_by(User.id).all()
     _render_user_list(users)
     st.divider()

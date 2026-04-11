@@ -227,6 +227,8 @@ def _check_session_timeout() -> bool:
 
 def main():
     _init_session_state()
+    # 每次 rerun 重置 CSS 注入标记，确保 CSS 在每次 rerun 中只注入一次
+    st.session_state.pop("_list_controls_css_injected", None)
     _restore_session_from_sid()
     # 未登录时侧栏折叠（登录页不占左侧），登录后侧栏展开
     sidebar_state = "expanded" if st.session_state.get(SESSION_KEY_LOGGED_IN) else "collapsed"

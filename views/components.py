@@ -380,6 +380,7 @@ def render_blacklist_table(records, page_size: int, current_page: int, selection
             ),
             "处理原因": st.column_config.TextColumn(
                 "处理原因",
+                width="medium",
                 help="Excel 导入或手动填写的原因文字；已上传 PDF 的记录此列为空"
             ),
         },
@@ -392,6 +393,60 @@ def render_blacklist_table(records, page_size: int, current_page: int, selection
         # 严控数组越界，丢弃所有非法的“跨时空/空心缩水”产生的幽灵勾选
         return [records[i] for i in selected_indices if i < len(records)]
     return []
+
+
+def render_record_detail_card(record, key_prefix: str = "detail"):
+    """渲染单条记录的完整详情卡片，展示所有字段全文。"""
+    today = datetime.now().date()
+    in_impact = False
+    if record.impact_start_date and record.impact_end_date:
+        in_impact = record.impact_start_date <= today <= record.impact_end_date
+    elif record.impact_start_date:
+        in_impact = record.impact_start_date <= today
+    elif record.impact_end_date:
+        in_impact = today <= record.impact_end_date
+
+    with st.container(border=True):
+        st.markdown(f"#### 📋 {record.name}（{record.student_id}）的详细信息")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown(f"**姓名**：{record.name}")
+            st.markdown(f"**工号/学号**：{record.student_id}")
+        with c2:
+            st.markdown(f"**所在单位**：{record.major or '未填写'}")
+            st.markdown(f"**认定日期**：{record.punishment_date or '未填写'}")
+        with c3:
+            impact_text = "无记录"
+            if record.impact_start_date and record.impact_end_date:
+                impact_text = f"{record.impact_start_date} 至 {record.impact_end_date}"
+            elif record.impact_start_date:
+                impact_text = f"{record.impact_start_date} 起"
+            elif record.impact_end_date:
+                impact_text = f"至 {record.impact_end_date}"
+            st.markdown(f"**处理起止时间**：{impact_text}")
+            st.markdown(f"**当前影响期**：{'✅ 是' if in_impact else '❌ 否'}")
+
+        reason_text = record.reason_text or ""
+        if reason_text:
+            st.markdown("**处理原因（全文）**：")
+            st.text_area(
+                "处理原因全文",
+                value=reason_text,
+                height=max(80, min(200, len(reason_text) // 2)),
+                disabled=True,
+                key=f"{key_prefix}_reason_{record.id}",
+                label_visibility="collapsed",
+            )
+        else:
+            st.caption("处理原因：未填写")
+
+        _reason = str(record.reason) if record.reason else ""
+        if _reason.lower().endswith(".pdf"):
+            st.markdown(f"**认定结论**：[📊 下载 PDF 公示文件]({_reason})")
+        elif _reason:
+            st.caption(f"认定结论：{_reason}")
+        else:
+            st.caption("认定结论：未上传")
 
 
 def render_pagination(page_key: str, current_page: int, total_pages: int, total_items: int, page_count: int):
@@ -466,51 +521,70 @@ def fetch_export_rows(query, max_rows: int = EXPORT_MAX_ROWS, batch_size: int = 
     return rows
 
 
+def _build_export_excel_bytes(export_rows) -> bytes:
+    """将名单记录列表构建为 Excel 字节数据（公共方法，消除重复代码）。"""
+    export_df = pd.DataFrame([
+        {
+            "序号": i,
+            "姓名": sanitize_for_export(r.name),
+            "工号/学号": r.student_id,
+            "所在单位": sanitize_for_export(r.major or ""),
+            "处理原因": sanitize_for_export(r.reason_text or ""),
+            "认定结论(文件路径)": sanitize_for_export(r.reason or ""),
+            "认定日期": str(r.punishment_date) if r.punishment_date else "",
+            "处理起至时间": f"{r.impact_start_date} 至 {r.impact_end_date}" if r.impact_start_date and r.impact_end_date else (str(r.impact_start_date) if r.impact_start_date else (str(r.impact_end_date) if r.impact_end_date else "")),
+        }
+        for i, r in enumerate(export_rows, 1)
+    ])
+    buf = BytesIO()
+    export_df.to_excel(buf, index=False, engine="openpyxl")
+    return buf.getvalue()
+
+
+EXPORT_ONE_STEP_THRESHOLD = 500
+
+
 def render_blacklist_export_button(db, status: int, fn: str, fs: str, fm: list[str],
                                    sort_key: str, sort_asc: bool, total: int,
                                    filename_prefix: str, button_key: str):
-    """渲染名单导出 Excel 按钮（分批查询，惰性生成缓存，避免多选刷新时造成灾难性卡顿）。"""
+    """渲染名单导出 Excel 按钮。≤500条一步下载；>500条两步惰性缓存。"""
     if total == 0:
         return
-        
-    # 定义当前查询状态的唯一签名
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     current_hash = f"{status}_{fn}_{fs}_{','.join(sorted(fm))}_{sort_key}_{sort_asc}"
     cache_hash_key = f"{button_key}_hash"
     cache_data_key = f"{button_key}_data"
-    
-    # 若缓存失效或条件变化，展现渲染生成按钮，阻断底层耗时运算
+
+    if total <= EXPORT_ONE_STEP_THRESHOLD:
+        if st.session_state.get(cache_hash_key) != current_hash or st.session_state.get(cache_data_key) is None:
+            base = build_blacklist_query(db, status, fn, fs, major_categories=fm)
+            ordered = apply_blacklist_sort(base, sort_key, sort_asc)
+            export_rows = fetch_export_rows(ordered, max_rows=total)
+            st.session_state[cache_hash_key] = current_hash
+            st.session_state[cache_data_key] = _build_export_excel_bytes(export_rows)
+        st.download_button(
+            label=f"⬇️ 导出当前筛选的{filename_prefix} (Excel, {total} 条)",
+            data=st.session_state[cache_data_key],
+            file_name=f"{filename_prefix}_{stamp}.xlsx",
+            mime=MIME_XLSX,
+            key=button_key,
+            use_container_width=True,
+        )
+        return
+
     if st.session_state.get(cache_hash_key) != current_hash or st.session_state.get(cache_data_key) is None:
         if st.button(f"⚡ 准备打包下载所有筛选记录（共 {total} 条）", use_container_width=True, key=f"{button_key}_prep"):
             with st.spinner(SPINNER_EXPORT):
                 base = build_blacklist_query(db, status, fn, fs, major_categories=fm)
                 ordered = apply_blacklist_sort(base, sort_key, sort_asc)
                 export_rows = fetch_export_rows(ordered)
-                
                 if len(export_rows) >= EXPORT_MAX_ROWS:
                     st.caption(f"筛选结果超过 {EXPORT_MAX_ROWS} 条，仅导出前 {EXPORT_MAX_ROWS} 条。")
-                    
-                export_df = pd.DataFrame([
-                    {
-                        "序号": i,
-                        "姓名": sanitize_for_export(r.name),
-                        "工号/学号": r.student_id,
-                        "所在单位": sanitize_for_export(r.major or ""),
-                        "认定结论(文件路径)": sanitize_for_export(r.reason or ""),
-                        "认定日期": str(r.punishment_date) if r.punishment_date else "",
-                        "处理起至时间": f"{r.impact_start_date} 至 {r.impact_end_date}" if r.impact_start_date and r.impact_end_date else (str(r.impact_start_date) if r.impact_start_date else (str(r.impact_end_date) if r.impact_end_date else "")),
-                    }
-                    for i, r in enumerate(export_rows, 1)
-                ])
-                buf = BytesIO()
-                export_df.to_excel(buf, index=False, engine="openpyxl")
-                
-                # 持久化到会话内存
                 st.session_state[cache_hash_key] = current_hash
-                st.session_state[cache_data_key] = buf.getvalue()
+                st.session_state[cache_data_key] = _build_export_excel_bytes(export_rows)
                 st.rerun()
     else:
-        # 完全命中内存态，0 CPU / 0 IO 渲染真理下载按钮
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         st.download_button(
             label=f"⬇️ 导出当前筛选的{filename_prefix} (Excel)",
             data=st.session_state[cache_data_key],
@@ -522,74 +596,58 @@ def render_blacklist_export_button(db, status: int, fn: str, fs: str, fm: list[s
 
 
 def render_single_unit_selector(key_prefix: str, default_val: str = "", label: str = "所在单位") -> str:
-    """渲染类似名单查询页面的级联单位选择器（弹出单选版 + 模糊检索）。注意：此组件包含 st.button，不可放于 st.form 内。"""
+    """渲染级联单位选择器（Popover 弹窗 + Radio 选择），避免按钮冲突。"""
     from core.config import ALL_UNIT_LIST
 
     sel_key = f"{key_prefix}_single_unit"
     search_key = f"{key_prefix}_search"
-    clear_key = f"{key_prefix}_search_clear"
-    panel_open_key = f"{key_prefix}_unit_panel_open"
-    toggle_key = f"{key_prefix}_panel_toggle"
 
     if sel_key not in st.session_state:
         st.session_state[sel_key] = default_val
 
-    # 必须在创建 text_input 之前清空，否则同一次 run 内改 key 会触发 StreamlitAPIException
-    if st.session_state.get(clear_key):
-        if search_key in st.session_state:
-            st.session_state[search_key] = ""
-        st.session_state[clear_key] = False
-
     current_val = st.session_state[sel_key]
 
     st.markdown(f"<div style='font-size:14px;margin-bottom:6px;opacity:0.8'>{label}</div>", unsafe_allow_html=True)
-    btn_label = f"🏫 当前选择：{current_val}" if current_val else "🏫 请点击展开详细分类面板 ▾"
-    panel_open = st.session_state.get(panel_open_key, False)
-    toggle_label = btn_label if not panel_open else (f"🏫 {current_val or '未选择'} · 点击收起 ▾")
+    popover_label = f"🏫 当前选择：{current_val}  ▾" if current_val else "🏫 请点击展开详细分类面板 ▾"
 
-    if st.button(toggle_label, key=toggle_key, use_container_width=True):
-        st.session_state[panel_open_key] = not panel_open
-        st.rerun()
-
-    if not st.session_state.get(panel_open_key, False):
-        return st.session_state[sel_key]
-
-    with st.container(border=True):
+    with st.popover(popover_label, use_container_width=True):
         st.markdown(
-            "<div style='font-size:13px;color:gray;margin-bottom:8px'>在下方输入关键字模糊检索，或者按大类折叠展开选择。选中后将自动套用并折叠该面板。</div>",
+            "<div style='font-size:13px;color:gray;margin-bottom:8px'>输入关键字模糊检索，或按大类展开选择。</div>",
             unsafe_allow_html=True,
         )
-
         search_val = st.text_input(
-            "模糊检索",
-            key=search_key,
-            placeholder="【🔍 输入搜索词按回车，仅显示匹配项】",
+            "模糊检索", key=search_key,
+            placeholder="🔍 输入搜索词筛选院系",
             label_visibility="collapsed",
         )
-
         if search_val and search_val.strip():
             matches = [u for u in ALL_UNIT_LIST if search_val.strip().lower() in u.lower()]
             if matches:
-                st.caption(f"为您查找到以下 **{len(matches)}** 个相关单位，点击直接录入：")
-                for m in matches:
-                    if st.button(m, key=f"{key_prefix}_match_{m}", use_container_width=True, type="primary"):
-                        st.session_state[sel_key] = m
-                        st.session_state[clear_key] = True
-                        st.session_state[panel_open_key] = False
-                        st.rerun()
+                st.caption(f"查找到 **{len(matches)}** 个相关单位：")
+                chosen = st.radio(
+                    "搜索结果", options=matches,
+                    index=matches.index(current_val) if current_val in matches else None,
+                    key=f"{key_prefix}_search_radio",
+                    label_visibility="collapsed",
+                )
+                if chosen and chosen != current_val:
+                    st.session_state[sel_key] = chosen
+                    st.rerun()
             else:
                 st.caption("未查找到包含该字符的单位分类。")
             st.markdown("---")
-
-        with st.container(height=300, border=False):
+        with st.container(height=320, border=False):
             for cat, units in UNIT_CATEGORY_MAP.items():
                 with st.expander(f"📁 **{cat}** ({len(units)}个院系)"):
-                    for u in units:
-                        btn_type = "primary" if current_val == u else "secondary"
-                        if st.button(u, key=f"{key_prefix}_btn_{u}", use_container_width=True, type=btn_type):
-                            st.session_state[sel_key] = u
-                            st.session_state[panel_open_key] = False
-                            st.rerun()
+                    idx = units.index(current_val) if current_val in units else None
+                    chosen = st.radio(
+                        f"选择{cat}院系", options=units, index=idx,
+                        key=f"{key_prefix}_radio_{cat}",
+                        label_visibility="collapsed",
+                    )
+                    if chosen and chosen != current_val:
+                        st.session_state[sel_key] = chosen
+                        st.rerun()
 
     return st.session_state[sel_key]
 

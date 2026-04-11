@@ -68,11 +68,18 @@ def render_single_search():
             st.error("查询失败，" + MSG_TRY_AGAIN)
             return
 
+    # 构建查询摘要用于审计
+    _query_names = ", ".join(
+        (p.name or p.student_id or "?")[:10] for p in parsed_inputs[:5]
+    )
+    if len(parsed_inputs) > 5:
+        _query_names += f" 等{len(parsed_inputs)}人"
     log_audit_action(
         AUDIT_QUERY_SINGLE,
-        target="",
+        target=_query_names,
         details=f"查询 {len(parsed_inputs)} 人，命中 {len(unique_records)} 人",
     )
+    st.toast(f"查询完成：命中 {len(unique_records)} 条")
 
     if not unique_records:
         st.success(MSG_NO_RECORD_GOOD)

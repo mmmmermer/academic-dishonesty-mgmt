@@ -24,7 +24,8 @@ def _get_admin_nav_index():
 
 
 def _on_admin_nav_change():
-    st.session_state["admin_nav_loading"] = True
+    """导航回调（保留空函数以满足 on_change 绑定）。"""
+    pass
 
 def render_admin_sidebar_nav():
     """在侧边栏渲染身份标题与四个功能板块导航（由 app 在 with st.sidebar 内调用）。"""
@@ -45,20 +46,12 @@ def render_admin_page():
     """管理员页主入口：根据侧边栏选中项渲染对应内容。"""
     nav_index = _get_admin_nav_index()
 
-    main_area = st.empty()
-
-    if st.session_state.pop("admin_nav_loading", False):
-        main_area.info("⏳ 正在为您极速切换板块并提取核心数据，请稍候...", icon="🚀")
-        import time
-        time.sleep(0.05)
-
-    with main_area.container():
-        with db_session() as db:
-            if nav_index == NAV_QUERY:
-                _render_list_query(db)
-            elif nav_index == NAV_MANAGEMENT:
-                _render_management(db)
-            elif nav_index == NAV_SYSTEM:
-                _render_system(db)
-            else:
-                _render_user_management(db)
+    with db_session() as db:
+        if nav_index == NAV_QUERY:
+            _render_list_query(db)
+        elif nav_index == NAV_MANAGEMENT:
+            _render_management(db)
+        elif nav_index == NAV_SYSTEM:
+            _render_system(db)
+        else:
+            _render_user_management(db)

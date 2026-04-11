@@ -31,6 +31,7 @@ from views.components import (
     render_blacklist_table,
     render_list_controls,
     render_pagination,
+    render_record_detail_card,
 )
 
 
@@ -95,6 +96,7 @@ def _render_cart_panel(all_filtered_query=None, total_filtered=0):
                 st.session_state["admin_export_cart"] = {}
                 st.session_state["cart_clear_nonce"] = st.session_state.get("cart_clear_nonce", 0) + 1
                 st.session_state.pop("cart_sel", None)
+                st.session_state["_flash_success"] = "暂存区已清空"
                 st.rerun()
 
         st.caption("勾选左侧方框标记条目，点「移除已勾选」即删除；不需要额外确认。")
@@ -135,10 +137,12 @@ def _render_cart_panel(all_filtered_query=None, total_filtered=0):
             remove_label = f"🗑️ 移除已勾选 ({len(to_remove)})" if to_remove else "🗑️ 移除已勾选"
             if st.button(remove_label, type="primary" if to_remove else "secondary",
                          disabled=remove_disabled, use_container_width=True, key="btn_remove_from_cart"):
+                _removed_count = len(to_remove)
                 for rid in to_remove:
                     cart.pop(rid, None)
                 st.session_state["cart_clear_nonce"] = st.session_state.get("cart_clear_nonce", 0) + 1
                 st.session_state.pop("cart_sel", None)
+                st.session_state["_flash_success"] = f"已从暂存区移除 {_removed_count} 条记录"
                 st.rerun()
 
         with action_cols[1]:
@@ -217,7 +221,7 @@ def _show_edit_dialog(edit_id):
         _cur_major = rec.major or ""
         from views.components import render_single_unit_selector
         edit_major = render_single_unit_selector("dialog_edit_major", default_val=_cur_major)
-        edit_reason_text = st.text_input("处理原因(文字)", value=(rec.reason_text or ""))
+        edit_reason_text = st.text_area("处理原因(文字)", value=(rec.reason_text or ""), height=100, placeholder="支持多段落，按 Enter 换行")
         if rec.reason:
             st.caption(f"当前已有文件：{rec.reason.split('/')[-1]}")
         edit_reason_file = st.file_uploader(f"更新认定结论 (PDF)", type=["pdf"])
@@ -261,9 +265,8 @@ def _show_edit_dialog(edit_id):
                 rec.impact_end_date = edit_impact_end
                 sync_blacklist_record_search_helper_fields(db, rec)
                 db.commit()
-                log_audit_action(AUDIT_ADD, target=f"弹窗编辑 {rec.id}", details=f"{rec.name} {rec.student_id[:8]}***")
-                st.success(SUCCESS_SAVED)
-                time.sleep(0.5)
+                log_audit_action(AUDIT_ADD, target=f"弹窗编辑 {rec.id}", details=f"编辑: {rec.name}({rec.student_id[:8]}***), 单位: {rec.major or '未填'}")
+                st.session_state["_flash_success"] = f"已保存修改：{rec.name}({rec.student_id[:8]}***)"
                 st.rerun()
             except Exception:
                 db.rollback()
@@ -277,6 +280,9 @@ def _show_edit_dialog(edit_id):
 
 def _render_list_query(db):
     st.subheader("名单查询")
+    # Flash 消息渲染（操作成功后 rerun 保留的反馈）
+    if _flash := st.session_state.pop("_flash_success", None):
+        st.success(_flash)
     
     fn, fs, fm, page_size, sort_key, sort_asc = render_list_controls("admin_effective")
     
@@ -308,6 +314,10 @@ def _render_list_query(db):
     
     # 选中操作台（显式「加入暂存区」，不再自动入区）
     _render_selected_actions(db, selected_records)
+
+    # ⑩ 选中单条记录时展开详情卡片
+    if len(selected_records) == 1:
+        render_record_detail_card(selected_records[0], key_prefix="admin_lq_detail")
 
     # 暂存区（始终渲染，有内容时展开面板）
     _render_cart_panel(all_filtered_query=ordered, total_filtered=total)
