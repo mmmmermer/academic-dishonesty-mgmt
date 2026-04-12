@@ -2,6 +2,7 @@
 enableStaticServing = true
 runOnSave = false
 fileWatcherType = "none"
+maxUploadSize = 10
 
 [runner]
 fastReruns = true
