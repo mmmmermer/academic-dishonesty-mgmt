@@ -3,8 +3,9 @@
 """
 import os
 import re
+import uuid
 import logging
-from typing import Optional
+from typing import Optional, Tuple
 
 from .student_id import clean_student_id
 from .database import DATABASE_DIR
@@ -13,6 +14,30 @@ _logger = logging.getLogger(__name__)
 
 # PDF 存储根目录（项目根/static/pdfs）
 _PDF_DIR = os.path.join(DATABASE_DIR, "static", "pdfs")
+
+# PDF 文件头魔数（所有合法 PDF 以 %PDF 开头）
+_PDF_MAGIC = b"%PDF"
+# 上传最大字节数（10MB）
+PDF_UPLOAD_MAX_BYTES = 10 * 1024 * 1024
+
+
+def validate_pdf_upload(file_data: bytes) -> Tuple[bool, str]:
+    """
+    校验上传的 PDF 文件：
+    1. 文件大小 ≤ 10MB
+    2. 文件头为 %PDF（防止伪装文件）
+    返回 (是否合法, 错误信息)。
+    """
+    if len(file_data) > PDF_UPLOAD_MAX_BYTES:
+        return False, f"文件大小超过限制（最大 {PDF_UPLOAD_MAX_BYTES // 1024 // 1024}MB）"
+    if not file_data[:4].startswith(_PDF_MAGIC):
+        return False, "文件内容不是有效的 PDF 格式，请上传真实的 PDF 文件"
+    return True, ""
+
+
+def generate_pdf_filename() -> str:
+    """生成不可猜测的 UUID 文件名，防止文件名枚举攻击。"""
+    return f"{uuid.uuid4().hex}.pdf"
 
 
 def safe_filename(raw: str) -> str:

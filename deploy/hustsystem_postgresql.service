@@ -1,0 +1,30 @@
+# ============================================================
+# systemd 服务配置 — PostgreSQL 生产版
+# ============================================================
+# 部署步骤：
+#   1. 先完成 PostgreSQL 安装和建库（见 deploy/setup_postgresql.sh）
+#   2. sudo cp hustsystem_postgresql.service /etc/systemd/system/hustsystem.service
+#   3. 编辑文件中 User / DATABASE_URL / DB_PASSWORD
+#   4. sudo systemctl daemon-reload
+#   5. sudo systemctl enable --now hustsystem
+
+[Unit]
+Description=HUST 学术道德监督管理系统 (Streamlit + PostgreSQL)
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+# 运行用户（不要用 root）
+User=admin
+WorkingDirectory=/opt/hustsystem
+Environment="PATH=/opt/hustsystem/venv/bin"
+
+# PostgreSQL 连接串（修改密码为你的实际值）
+Environment="DATABASE_URL=postgresql+psycopg2://hustsys:你的强密码@localhost:5432/hustsystem"
+
+ExecStart=/opt/hustsystem/venv/bin/python -m streamlit run app.py --server.address=0.0.0.0 --server.port=8501 --server.headless=true
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

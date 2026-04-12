@@ -348,7 +348,7 @@ def render_blacklist_table(records, page_size: int, current_page: int, selection
             "姓名": r.name,
             "工号/学号": r.student_id,
             "所在单位": r.major or "",
-            "认定结论": _reason if _is_pdf else "",   # PDF 路径，供 LinkColumn 渲染
+            "认定结论": "📄 已上传" if _is_pdf else "",   # 安全：不暴露文件路径，仅显示状态
             "处理原因": r.reason_text or "",  # 纯文字原因，从此独立字段读取
             "认定日期": str(r.punishment_date) if r.punishment_date else "",
             "处理起至时间": f"{r.impact_start_date} 至 {r.impact_end_date}" if r.impact_start_date and r.impact_end_date else (str(r.impact_start_date) if r.impact_start_date else (str(r.impact_end_date) if r.impact_end_date else "")),
@@ -373,10 +373,9 @@ def render_blacklist_table(records, page_size: int, current_page: int, selection
         hide_index=True,
         height=computed_height,
         column_config={
-            "认定结论": st.column_config.LinkColumn(
+            "认定结论": st.column_config.TextColumn(
                 "认定结论",
-                display_text="📊 PDF 公示文件",
-                help="点击下载/预览官方 PDF 报告"
+                help="点击某行展开详情即可预览 PDF 公示文件"
             ),
             "处理原因": st.column_config.TextColumn(
                 "处理原因",
@@ -386,7 +385,7 @@ def render_blacklist_table(records, page_size: int, current_page: int, selection
         },
         **kwargs
     )
-    st.caption("注：『认定结论』列有链接代表已上传 PDF 公示文件；『处理原因』列显示文字说明（未上传 PDF 时）。")
+    st.caption("注：『认定结论』列显示『📄 已上传』代表已有 PDF 公示文件，点击该行展开详情即可预览。")
     
     if selection_key and hasattr(event, "selection") and hasattr(event.selection, "rows"):
         selected_indices = event.selection.rows
@@ -442,7 +441,8 @@ def render_record_detail_card(record, key_prefix: str = "detail"):
 
         _reason = str(record.reason) if record.reason else ""
         if _reason.lower().endswith(".pdf"):
-            st.markdown(f"**认定结论**：[📊 下载 PDF 公示文件]({_reason})")
+            from core.pdf_server import render_pdf_preview
+            render_pdf_preview(_reason, key_suffix=f"{key_prefix}_{record.id}")
         elif _reason:
             st.caption(f"认定结论：{_reason}")
         else:

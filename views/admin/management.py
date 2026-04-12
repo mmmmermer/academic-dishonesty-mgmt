@@ -44,7 +44,7 @@ from core.database import db_session
 from core.models import Blacklist
 from core.search import sync_blacklist_record_search_helper_fields
 from core.excel_processor import REQUIRED_EXCEL_COLUMNS, cell_str, parse_blacklist_excel
-from core.file_safe_guard import _PDF_DIR, remove_old_pdf, safe_filename
+from core.file_safe_guard import _PDF_DIR, remove_old_pdf, safe_filename, validate_pdf_upload, generate_pdf_filename
 from core.student_id import clean_student_id, validate_student_id
 from core.audit_logger import log_audit_action
 from views.components import (
@@ -235,11 +235,16 @@ def _try_manual_add(db, add_name, add_student_id, add_major, add_reason_text, ad
         
     pdf_path = None
     if add_reason_file is not None:
+        file_bytes = add_reason_file.getvalue()
+        ok, err = validate_pdf_upload(file_bytes)
+        if not ok:
+            st.error(err)
+            return False
         os.makedirs(_PDF_DIR, exist_ok=True)
-        filename = f"{safe_filename(add_student_id)}_{int(time.time())}.pdf"
+        filename = generate_pdf_filename()
         file_path = os.path.join(_PDF_DIR, filename)
         with open(file_path, "wb") as f:
-            f.write(add_reason_file.getvalue())
+            f.write(file_bytes)
         pdf_path = f"/app/static/pdfs/{filename}"
 
     try:
@@ -383,13 +388,19 @@ def _try_save_edit_form(edit_db, rec, edit_id, edit_name, edit_major, edit_reaso
             rec.reason_text = edit_reason_text.strip() or None
         
         if edit_reason_file is not None:
+            # 校验文件合法性
+            file_bytes = edit_reason_file.getvalue()
+            ok, err = validate_pdf_upload(file_bytes)
+            if not ok:
+                st.error(err)
+                return
             # 清理旧 PDF（若存在），避免磁盘累积孤儿文件
             old_reason_path = rec.reason
             os.makedirs(_PDF_DIR, exist_ok=True)
-            filename = f"{safe_filename(rec.student_id)}_{int(time.time())}.pdf"
+            filename = generate_pdf_filename()
             file_path = os.path.join(_PDF_DIR, filename)
             with open(file_path, "wb") as f:
-                f.write(edit_reason_file.getvalue())
+                f.write(file_bytes)
             rec.reason = f"/app/static/pdfs/{filename}"
             # commit 成功后再删旧文件（见下方 commit 后的调用）
             remove_old_pdf(old_reason_path)
