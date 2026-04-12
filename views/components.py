@@ -360,7 +360,15 @@ def render_blacklist_table(records, page_size: int, current_page: int, selection
     # 方案 A：精准计算动态高度，消除底部空出的半行间隙
     # 严格吸附高度：行高固定 35px，表头 38px，底部边线 1px
     computed_height = (max(1, len(df)) * 35) + 39
-    
+    # 隐藏 st.dataframe 自带的工具栏（含下载 CSV 按钮），系统已有专门的 Excel 导出功能
+    st.markdown("""
+        <style>
+        [data-testid="stElementToolbar"] {
+            display: none !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
     kwargs = {}
     if selection_key is not None:
         kwargs["on_select"] = "rerun"
