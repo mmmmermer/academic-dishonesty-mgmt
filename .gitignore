@@ -19,6 +19,7 @@ logs/
 
 # 临时文件
 tmp/
+tmp_streamlit_test/
 
 # 部署产物 / 测试数据
 hustsystem_deploy.zip
