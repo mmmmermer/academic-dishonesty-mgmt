@@ -3,7 +3,7 @@
 """
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 
 import pandas as pd
@@ -223,8 +223,97 @@ def _render_audit_log_section(db):
         st.error("加载审计日志失败，" + MSG_TRY_AGAIN)
 
 
+def _render_audit_archive_section(db):
+    """审计日志归档：导出旧日志并可选删除，防止数据库无限膨胀。"""
+    with st.expander("▶ 审计日志归档清理", expanded=False):
+        st.caption("导出并清理旧的审计日志，保持数据库精简。此操作本身会被记入审计日志。")
+
+        today = datetime.now().date()
+        keep_days = st.selectbox(
+            "保留最近多少天的日志",
+            options=[30, 60, 90, 180, 365],
+            index=2,  # 默认 90 天
+            key="archive_keep_days",
+        )
+        cutoff_date = today - timedelta(days=keep_days)
+
+        try:
+            old_count = db.query(func.count(AuditLog.id)).filter(
+                func.date(AuditLog.timestamp) < str(cutoff_date)
+            ).scalar() or 0
+        except Exception:
+            st.error("查询失败，请稍后重试")
+            return
+
+        if old_count == 0:
+            st.success(f"✅ 无需清理：{cutoff_date} 之前没有旧日志")
+            return
+
+        st.info(f"📊 {cutoff_date} 之前共有 **{old_count}** 条旧日志可归档")
+
+        ac1, ac2 = st.columns(2)
+        with ac1:
+            if st.button(f"📦 导出 {old_count} 条旧日志", use_container_width=True, key="btn_archive_export"):
+                with st.spinner("正在导出..."):
+                    old_logs = db.query(AuditLog).filter(
+                        func.date(AuditLog.timestamp) < str(cutoff_date)
+                    ).order_by(AuditLog.timestamp.desc()).limit(EXPORT_MAX_ROWS).all()
+                    if old_logs:
+                        df = pd.DataFrame([{
+                            "ID": r.id,
+                            "操作人": r.operator_name,
+                            "类型": AUDIT_TYPE_NAMES.get(r.action_type, r.action_type),
+                            "对象": r.target or "",
+                            "详情": r.details or "",
+                            "时间": str(r.timestamp),
+                        } for r in old_logs])
+                        buf = BytesIO()
+                        df.to_excel(buf, index=False, engine="openpyxl")
+                        st.session_state["_archive_export_data"] = buf.getvalue()
+                        st.rerun()
+
+        if st.session_state.get("_archive_export_data"):
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            st.download_button(
+                "⬇️ 下载归档文件",
+                data=st.session_state["_archive_export_data"],
+                file_name=f"审计日志归档_{stamp}.xlsx",
+                mime=MIME_XLSX,
+                key="archive_dl",
+                use_container_width=True,
+            )
+
+        with ac2:
+            if st.button(f"🗑️ 删除 {old_count} 条旧日志", use_container_width=True, key="btn_archive_delete", type="primary"):
+                st.session_state["_archive_confirm"] = True
+
+        if st.session_state.get("_archive_confirm"):
+            st.warning(f"⚠️ 即将永久删除 {cutoff_date} 之前的 {old_count} 条审计日志，此操作不可撤销！")
+            cc1, cc2 = st.columns(2)
+            with cc1:
+                if st.button("✅ 确认删除", key="btn_archive_confirm_yes", use_container_width=True, type="primary"):
+                    try:
+                        deleted = db.query(AuditLog).filter(
+                            func.date(AuditLog.timestamp) < str(cutoff_date)
+                        ).delete(synchronize_session=False)
+                        db.commit()
+                        log_audit_action("audit_archive", target=f"清理{deleted}条", details=f"删除 {cutoff_date} 之前的 {deleted} 条审计日志")
+                        st.session_state.pop("_archive_confirm", None)
+                        st.session_state.pop("_archive_export_data", None)
+                        st.session_state["_flash_success"] = f"已清理 {deleted} 条旧审计日志"
+                        st.rerun()
+                    except Exception:
+                        db.rollback()
+                        st.error("删除失败，请稍后重试")
+            with cc2:
+                if st.button("❌ 取消", key="btn_archive_confirm_no", use_container_width=True):
+                    st.session_state.pop("_archive_confirm", None)
+                    st.rerun()
+
+
 def _render_system(db):
-    """系统维护：审计日志。"""
+    """系统维护：审计日志 + 归档清理。"""
     _render_audit_log_section(db)
+    _render_audit_archive_section(db)
     with st.expander("▶ 数据库备份与灾备", expanded=False):
         st.info("数据管理已交由 PG 灾备中心流水，本系统不再提供单机版数据库本地热下载与覆盖功能。请利用 pg_dump 执行外围自动化回演与灾备。")
