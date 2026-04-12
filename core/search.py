@@ -560,8 +560,13 @@ def fetch_teacher_candidate_records(
         )
         if cond is None:
             if detect_input_type(item.name_query) != "chinese":
-                # SQLite (or old schema) without helper columns still needs pinyin fallback.
                 need_full_scan = True
+            continue
+
+        # 无辅助列时，拼音输入的 SQL 仅能做 name LIKE '%xx%'，
+        # 对中文姓名无法命中，必须兜底走 Python 全表拼音匹配。
+        if not helper_columns and detect_input_type(item.name_query) != "chinese":
+            need_full_scan = True
             continue
 
         rows = query.filter(cond).params(**params).limit(per_input_limit).all()

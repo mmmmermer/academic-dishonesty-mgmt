@@ -9,7 +9,7 @@ from core.search import (
     search_teacher_records,
 )
 from core.search_config import SEARCH_INPUT_MAX_LENGTH
-from views.components import render_blacklist_table
+from views.components import render_blacklist_table, render_record_detail_card, render_pagination, clamp_page
 from core.student_id import validate_student_id
 from core.audit_logger import log_audit_action
 from core.config import (
@@ -19,6 +19,10 @@ from core.config import (
     MSG_TRY_AGAIN,
     TERM_DISHONEST_RECORD,
 )
+
+# 单条查询结果每页条数
+_SINGLE_SEARCH_PAGE_SIZE = 20
+
 
 def render_single_search():
     """单条查询：支持中文姓名、学号/工号、拼音/首字母；多人请用显式分隔符。"""
@@ -97,5 +101,24 @@ def render_single_search():
     if non_exact_modes:
         st.info("当前结果包含模糊或拼音匹配，请结合学号/工号进一步核实。")
 
-    st.error(f"共查 {len(parsed_inputs)} 人，命中 {len(unique_records)} 条{TERM_DISHONEST_RECORD}，请核实。")
-    render_blacklist_table(unique_records, page_size=max(1, len(unique_records)), current_page=0)
+    st.warning(f"共查 {len(parsed_inputs)} 人，命中 {len(unique_records)} 条{TERM_DISHONEST_RECORD}，请核实。")
+
+    # 分页展示
+    total = len(unique_records)
+    page_size = _SINGLE_SEARCH_PAGE_SIZE
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = clamp_page("teacher_single_page", total_pages)
+    page_start = page * page_size
+    page_end = min(page_start + page_size, total)
+    page_records = unique_records[page_start:page_end]
+
+    state_sig = f"single_{page}_{raw_text[:20]}"
+    sel_key = f"teacher_single_sel_{state_sig}"
+    selected = render_blacklist_table(page_records, page_size, page, selection_key=sel_key, selection_mode="single-row")
+
+    if total_pages > 1:
+        render_pagination("teacher_single_page", page, total_pages, total, len(page_records))
+
+    # 选中单条记录时展开详情卡片（含 PDF 预览）
+    if len(selected) == 1:
+        render_record_detail_card(selected[0], key_prefix="teacher_single_detail")

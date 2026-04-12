@@ -316,4 +316,4 @@ def _render_system(db):
     _render_audit_log_section(db)
     _render_audit_archive_section(db)
     with st.expander("▶ 数据库备份与灾备", expanded=False):
-        st.info("数据管理已交由 PG 灾备中心流水，本系统不再提供单机版数据库本地热下载与覆盖功能。请利用 pg_dump 执行外围自动化回演与灾备。")
+        st.info("建议定期备份数据库和 PDF 文件目录（static/pdfs/）。SQLite 模式下可直接复制数据库文件；PostgreSQL 模式下请使用 pg_dump 命令备份。详见 deploy/ 目录下的备份脚本示例。")
